@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PyScript + Preact</title>
+
+  <!-- PyScript -->
+  <link rel="stylesheet" href="https://pyscript.net/releases/2026.3.1/core.css" />
+  <script type="module" src="https://pyscript.net/releases/2026.3.1/core.js"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Courier New', monospace;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    h1 {
+      font-size: 1.2rem;
+      font-weight: normal;
+      letter-spacing: 0.15em;
+      color: #888;
+      margin-bottom: 2rem;
+      text-transform: uppercase;
+    }
+
+    #root {
+      width: 100%;
+      max-width: 480px;
+    }
+
+    /* PyScript loading overlay */
+    #py-loading {
+      position: fixed;
+      inset: 0;
+      background: #0f0f0f;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Courier New', monospace;
+      color: #555;
+      font-size: 0.85rem;
+      letter-spacing: 0.1em;
+      z-index: 100;
+      transition: opacity 0.4s;
+    }
+  </style>
+
+  <!-- Preact + HTM -->
+  <script type="module">
+    import { h, render } from 'https://esm.sh/preact@10.22.0';
+    import { useState, useEffect, useCallback } from 'https://esm.sh/preact@10.22.0/hooks';
+    import { html } from 'https://esm.sh/htm@3.1.1/preact';
+
+    const css = String.raw;
+
+    const styles = css`
+      .card {
+        border: 1px solid #2a2a2a;
+        border-radius: 4px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+        background: #161616;
+      }
+      .label {
+        font-size: 0.7rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #555;
+        margin-bottom: 0.5rem;
+      }
+      .value {
+        font-size: 2rem;
+        color: #e0e0e0;
+        margin-bottom: 1rem;
+      }
+      .input-row {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      input[type="number"] {
+        flex: 1;
+        background: #0f0f0f;
+        border: 1px solid #2a2a2a;
+        border-radius: 4px;
+        color: #e0e0e0;
+        font-family: 'Courier New', monospace;
+        font-size: 1rem;
+        padding: 0.5rem 0.75rem;
+        outline: none;
+        transition: border-color 0.15s;
+      }
+      input[type="number"]:focus {
+        border-color: #555;
+      }
+      button {
+        background: #1e1e1e;
+        border: 1px solid #333;
+        border-radius: 4px;
+        color: #e0e0e0;
+        font-family: 'Courier New', monospace;
+        font-size: 0.85rem;
+        letter-spacing: 0.05em;
+        padding: 0.5rem 1rem;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      button:hover:not(:disabled) {
+        background: #2a2a2a;
+        border-color: #555;
+      }
+      button:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+      .result-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.35rem 0;
+        border-bottom: 1px solid #1e1e1e;
+        font-size: 0.85rem;
+      }
+      .result-row:last-child { border-bottom: none; }
+      .result-key { color: #555; }
+      .result-val { color: #a0c4a0; }
+      .status {
+        font-size: 0.75rem;
+        letter-spacing: 0.08em;
+        padding: 0.25rem 0.5rem;
+        border-radius: 3px;
+        display: inline-block;
+      }
+      .status.ready { background: #1a2e1a; color: #6aaa6a; }
+      .status.loading { background: #1e1e1e; color: #555; }
+    `;
+
+    function App() {
+      const [ready, setReady] = useState(false);
+      const [inputVal, setInputVal] = useState(7);
+      const [results, setResults] = useState(null);
+      const [working, setWorking] = useState(false);
+
+      useEffect(() => {
+        const styleEl = document.createElement('style');
+        styleEl.textContent = styles;
+        document.head.appendChild(styleEl);
+
+        const onReady = () => {
+          setReady(true);
+          const loading = document.getElementById('py-loading');
+          if (loading) { loading.style.opacity = '0'; setTimeout(() => loading.remove(), 400); }
+        };
+
+        window.addEventListener('mpy:done', onReady);
+        return () => window.removeEventListener('mpy:done', onReady);
+      }, []);
+
+      const runPython = useCallback(async () => {
+        if (!ready || !window.pyProcess) return;
+        setWorking(true);
+        try {
+          // Direct call — no events needed
+          const raw = await window.pyProcess({ value: Number(inputVal) });
+          setResults({
+            input: inputVal,
+            squared: raw.squared,
+            cubed: raw.cubed,
+            is_even: raw.is_even ? 'yes' : 'no',
+            binary: raw.binary,
+          });
+        } finally {
+          setWorking(false);
+        }
+      }, [ready, inputVal]);
+
+      return html`
+        <div>
+          <div class="card">
+            <div class="label">status</div>
+            <span class=${`status ${ready ? 'ready' : 'loading'}`}>
+              ${ready ? '● micropython ready' : '○ loading...'}
+            </span>
+          </div>
+
+          <div class="card">
+            <div class="label">input</div>
+            <div class="input-row">
+              <input
+                type="number"
+                value=${inputVal}
+                onInput=${e => setInputVal(e.target.value)}
+                disabled=${!ready}
+              />
+              <button onClick=${runPython} disabled=${!ready || working}>
+                ${working ? 'running...' : 'run →'}
+              </button>
+            </div>
+          </div>
+
+          ${results && html`
+            <div class="card">
+              <div class="label">python output</div>
+              ${Object.entries(results).map(([k, v]) => html`
+                <div class="result-row">
+                  <span class="result-key">${k}</span>
+                  <span class="result-val">${v}</span>
+                </div>
+              `)}
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    render(h(App, null), document.getElementById('root'));
+
+  </script>
+
+
+  <script>
+      addEventListener("mpy:ready", () => {
+          // show running for an instance
+          console.log('mpy:ready')
+      });
+      addEventListener("mpy:done", () => {
+          console.log('mpy:done')
+      });
+      console.log("registered")
+  </script>
+
+
+  <!-- PyScript MicroPython -->
+
+  <script type="mpy">
+from pyscript import window
+from pyscript.ffi import to_js
+
+def process(data):
+    value = int(data["value"])
+    result = {
+        "squared": value ** 2,
+        "cubed":   value ** 3,
+        "is_even": value % 2 == 0,
+        "binary":  bin(value),
+    }
+    return to_js(result)
+
+window.pyProcess = process
+  </script>
+</head>
+<body>
+  <div id="py-loading">loading micropython…</div>
+  <h1>PyScript + Preact HTM</h1>
+  <div id="root"></div>
+</body>
+</html>
