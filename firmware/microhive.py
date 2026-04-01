@@ -27,6 +27,21 @@ TYPECODE = 'h'  # int16
 ITEMSIZE = 2    # bytes per element
 
 # ---------------------------------------------------------------------------
+# Monotonic millisecond clock — resolved once at import time.
+# MicroPython: time.ticks_ms / time.ticks_diff (fast, no overflow issues).
+# CPython: fallback via time.time() * 1000 (slower, fine for host testing).
+# ---------------------------------------------------------------------------
+
+try:
+    from time import ticks_ms as _ticks_ms, ticks_diff as _ticks_diff
+except ImportError:
+    import time as _time
+    def _ticks_ms():
+        return int(_time.time() * 1000)
+    def _ticks_diff(new, old):
+        return new - old
+
+# ---------------------------------------------------------------------------
 # Time helpers
 # ---------------------------------------------------------------------------
 
@@ -253,11 +268,11 @@ class MicroHive:
 
     DEFAULT_CHUNK_ROWS = 64
 
-    def __init__(self, base_dir, resources):
+    def __init__(self, base_dir, resources, debug=True):
         self._base = base_dir
         self._resources = resources
-        # Track last partition key per resource to detect boundary crossings
         self._last_partition = {}
+        self.debug = debug
 
     def _res(self, name):
         if name not in self._resources:
@@ -273,6 +288,7 @@ class MicroHive:
         Query [start_s, end_s) in Unix epoch seconds.
         Yields array.array('h') of chunk_rows rows in row-major order.
         Each element corresponds to resource['columns'] in order.
+        If self.debug is True, prints aggregate timing after the query completes.
         """
         if chunk_rows is None:
             chunk_rows = self.DEFAULT_CHUNK_ROWS
@@ -280,32 +296,47 @@ class MicroHive:
         n_cols = len(cfg['columns'])
         gran = cfg['granularity']
         hop_us = cfg['hop']
-        dur_s = _partition_duration_s(gran)
 
-        buf = array.array(TYPECODE)
+        # Debug accumulators
+        t_enum_ms   = 0  # partition directory enumeration
+        t_open_ms   = 0  # file open + header parse
+        t_skip_ms   = 0  # reading/discarding rows before row_start
+        t_read_ms   = 0  # f.read() + array.frombytes() inside npyfile
+        t_copy_ms   = 0  # copying disk_buf into preallocated yield buf
+        t_yield_ms  = 0  # time caller spends suspended between yields
+        t_alloc_ms  = 0  # array allocation
+        n_partitions = 0
+        n_rows_skipped = 0
+        n_rows_read = 0
+
+        buf = None   # preallocated on first use, sized to chunk_rows
         buf_rows = 0
 
-        for key, pdir, ps, pe in _partitions_in_range(
-                self._base, resource, gran, start_s, end_s):
+        t0 = _ticks_ms()
 
+        t_e = _ticks_ms()
+        partitions = list(_partitions_in_range(self._base, resource, gran, start_s, end_s))
+        t_enum_ms += _ticks_diff(_ticks_ms(), t_e)
+
+        for key, pdir, ps, pe in partitions:
+            n_partitions += 1
             path = _data_file(pdir, resource)
-            print('open', path)
+
+            t_o = _ticks_ms()
             try:
                 reader = npyfile.Reader(path)
             except OSError:
+                t_open_ms += _ticks_diff(_ticks_ms(), t_o)
                 continue
 
             with reader as r:
-                if len(r.shape) < 2:
-                    continue
-                total_rows = r.shape[0]
-                file_cols = r.shape[1]
-                if file_cols != n_cols:
+                t_open_ms += _ticks_diff(_ticks_ms(), t_o)
+
+                if len(r.shape) < 2 or r.shape[1] != n_cols:
                     continue
 
+                total_rows = r.shape[0]
                 hop_s_float = hop_us / 1_000_000.0
-                # Row index range that overlaps [start_s, end_s)
-                # row_time = ps + row_idx * hop_s
                 row_start = max(0, int((start_s - ps) / hop_s_float))
                 if end_s >= pe:
                     row_end = total_rows
@@ -315,31 +346,69 @@ class MicroHive:
                 if row_start >= row_end:
                     continue
 
-                row_idx = 0
-                items_to_skip = row_start * n_cols
-                items_skipped = 0
+                rows_needed = row_end - row_start
+                disk_chunk_rows = chunk_rows  # read one yield-buffer at a time from disk
 
-                for chunk in r.read_data_chunks(n_cols):
-                    # Skip rows before row_start
-                    if items_skipped < items_to_skip:
-                        items_skipped += len(chunk)
-                        continue
+                # Skip rows before row_start in one large read
+                if row_start > 0:
+                    t_s = _ticks_ms()
+                    for skip_chunk in r.read_data_chunks(row_start * n_cols):
+                        n_rows_skipped += row_start
+                        break  # read_data_chunks gave us exactly row_start rows in one go
+                    t_skip_ms += _ticks_diff(_ticks_ms(), t_s)
 
-                    if row_idx >= row_end:
+                # Preallocate yield buffer; reuse across chunks from this partition
+                if buf is None:
+                    t_a = _ticks_ms()
+                    buf = array.array(TYPECODE, [0] * (chunk_rows * n_cols))
+                    t_alloc_ms += _ticks_diff(_ticks_ms(), t_a)
+
+                rows_remaining = rows_needed
+                disk_iter = r.read_data_chunks(disk_chunk_rows * n_cols)
+                while rows_remaining > 0:
+                    t_r = _ticks_ms()
+                    try:
+                        disk_buf = next(disk_iter)
+                    except StopIteration:
                         break
+                    t_read_ms += _ticks_diff(_ticks_ms(), t_r)
 
-                    if row_start <= row_idx < row_end:
-                        buf.extend(chunk)
-                        buf_rows += 1
-                        if buf_rows >= chunk_rows:
-                            yield buf
-                            buf = array.array(TYPECODE)
-                            buf_rows = 0
+                    items_got = len(disk_buf)
+                    rows_got  = items_got // n_cols
+                    n_rows_read += rows_got
 
-                    row_idx += 1
+                    t_copy = _ticks_ms()
+                    base = buf_rows * n_cols
+                    for i in range(items_got):
+                        buf[base + i] = disk_buf[i]
+                    buf_rows += rows_got
+                    t_copy_ms += _ticks_diff(_ticks_ms(), t_copy)
+
+                    rows_remaining -= rows_got
+
+                    if buf_rows >= chunk_rows:
+                        t_before = _ticks_ms()
+                        yield buf
+                        t_yield_ms += _ticks_diff(_ticks_ms(), t_before)
+                        t_a = _ticks_ms()
+                        buf = array.array(TYPECODE, [0] * (chunk_rows * n_cols))
+                        t_alloc_ms += _ticks_diff(_ticks_ms(), t_a)
+                        buf_rows = 0
 
         if buf_rows > 0:
-            yield buf
+            t_before = _ticks_ms()
+            yield array.array(TYPECODE, buf[:buf_rows * n_cols])
+            t_yield_ms += _ticks_diff(_ticks_ms(), t_before)
+
+        if self.debug:
+            t_total_ms = _ticks_diff(_ticks_ms(), t0)
+            t_other_ms = max(0, t_total_ms - t_enum_ms - t_open_ms
+                             - t_skip_ms - t_read_ms - t_copy_ms
+                             - t_alloc_ms - t_yield_ms)
+            print("[query debug] resource={} partitions={} rows_read={} rows_skipped={}".format(
+                resource, n_partitions, n_rows_read, n_rows_skipped))
+            print("[query debug] total={}ms  enum={}ms  open={}ms  skip={}ms  read={}ms  copy={}ms  alloc={}ms  yield={}ms  other={}ms".format(
+                t_total_ms, t_enum_ms, t_open_ms, t_skip_ms, t_read_ms, t_copy_ms, t_alloc_ms, t_yield_ms, t_other_ms))
 
     # ------------------------------------------------------------------
     # Append

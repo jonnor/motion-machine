@@ -224,45 +224,83 @@ def _step_load(source_npy, base_dir, resource, n_cols, append_chunk_rows, base_e
     return db
 
 
-def _step_query(db, result_npy, n_cols, base_epoch, resource,
-                query_start_offset_h, query_end_offset_h):
-    """Step 3: Query a middle window and stream result to query_result.npy."""
+def _query_iter(db, resource_name, start_s, end_s, chunk_rows, n_cols, hop_s):
+    """Shared iteration logic: yields (chunk, elapsed_ms, data_ts) for each chunk."""
+    t_chunk = _ms()
+    total_rows = 0
+    for chunk in db.get_timerange(resource_name, start_s, end_s, chunk_rows=chunk_rows):
+        elapsed      = _diff_ms(t_chunk)
+        chunk_rows_n = len(chunk) // n_cols
+        data_ts      = start_s + int(total_rows * hop_s)
+        yield chunk, elapsed, data_ts, total_rows, chunk_rows_n
+        total_rows  += chunk_rows_n
+        t_chunk      = _ms()
+
+
+def _step_query_readonly(db, n_cols, base_epoch, resource,
+                         query_start_offset_h, query_end_offset_h):
+    """Step 3a: Query only — no file I/O. Isolates pure read performance."""
     start_s       = base_epoch + query_start_offset_h * 3600
     end_s         = base_epoch + query_end_offset_h * 3600
     expected_rows = (query_end_offset_h - query_start_offset_h) * 3600
     chunk_rows    = 600
+    hop_s         = resource['hop'] / 1_000_000.0
 
-    print("Step 3: Query hours {}..{} -> query_result.npy".format(
+    print("Step 3a: Query hours {}..{} (read-only, no file write)".format(
         query_start_offset_h, query_end_offset_h))
     print("  Expected rows: {}  |  chunk_rows: {}".format(expected_rows, chunk_rows))
     t0 = _ms()
 
-    # Pass 1: count rows (needed to write .npy shape header up front)
-    count = sum(
-        len(chunk) // n_cols
-        for chunk in db.get_timerange("sensor", start_s, end_s, chunk_rows=chunk_rows)
-    )
-
-    # Pass 2: stream into output file
     total_rows   = 0
     max_chunk_ms = 0
-    hop_s        = resource['hop'] / 1_000_000.0
+    for chunk, elapsed, data_ts, row_offset, chunk_rows_n in             _query_iter(db, "sensor", start_s, end_s, chunk_rows, n_cols, hop_s):
+        data_ts_t = time.gmtime(data_ts)
+        print("  chunk {:4d}: {:02d}:{:02d}:{:02d}  rows {:5d}-{:5d}  ({} ms)".format(
+            row_offset // chunk_rows,
+            data_ts_t[3], data_ts_t[4], data_ts_t[5],
+            row_offset, row_offset + chunk_rows_n - 1,
+            elapsed))
+        max_chunk_ms = max(max_chunk_ms, elapsed)
+        total_rows  += chunk_rows_n
+
+    print("  Rows returned: {}  [{}]".format(
+        total_rows, "OK" if total_rows == expected_rows else "FAIL"))
+    print("  Max chunk latency: {} ms  [{}]".format(
+        max_chunk_ms, "OK" if max_chunk_ms <= 500 else "FAIL >500ms"))
+    print("  Total query time: {} ms".format(_diff_ms(t0)))
+    print()
+
+
+def _step_query_write(db, result_npy, n_cols, base_epoch, resource,
+                      query_start_offset_h, query_end_offset_h):
+    """Step 3b: Query and write result to query_result.npy."""
+    start_s       = base_epoch + query_start_offset_h * 3600
+    end_s         = base_epoch + query_end_offset_h * 3600
+    expected_rows = (query_end_offset_h - query_start_offset_h) * 3600
+    chunk_rows    = 600
+    hop_s         = resource['hop'] / 1_000_000.0
+
+    # Row count from time range and hop — data is dense and regular
+    count = int((end_s - start_s) * 1_000_000) // resource['hop']
+
+    print("Step 3b: Query hours {}..{} -> query_result.npy".format(
+        query_start_offset_h, query_end_offset_h))
+    print("  Expected rows: {}  |  chunk_rows: {}".format(expected_rows, chunk_rows))
+    t0 = _ms()
+
+    total_rows   = 0
+    max_chunk_ms = 0
     with npyfile.Writer(result_npy, shape=(count, n_cols), typecode=TYPECODE) as w:
-        t_chunk = _ms()
-        for chunk in db.get_timerange("sensor", start_s, end_s, chunk_rows=chunk_rows):
-            elapsed      = _diff_ms(t_chunk)
-            chunk_rows_n = len(chunk) // n_cols
-            data_ts      = start_s + int(total_rows * hop_s)
-            data_ts_t    = time.gmtime(data_ts)
+        for chunk, elapsed, data_ts, row_offset, chunk_rows_n in                 _query_iter(db, "sensor", start_s, end_s, chunk_rows, n_cols, hop_s):
+            data_ts_t = time.gmtime(data_ts)
             print("  chunk {:4d}: {:02d}:{:02d}:{:02d}  rows {:5d}-{:5d}  ({} ms)".format(
-                total_rows // chunk_rows,
+                row_offset // chunk_rows,
                 data_ts_t[3], data_ts_t[4], data_ts_t[5],
-                total_rows, total_rows + chunk_rows_n - 1,
+                row_offset, row_offset + chunk_rows_n - 1,
                 elapsed))
             max_chunk_ms = max(max_chunk_ms, elapsed)
             total_rows  += chunk_rows_n
             w.write_values(chunk, typecode=TYPECODE)
-            t_chunk = _ms()
 
     size_bytes = os.stat(result_npy)[6]
     print("  Rows returned: {}  [{}]".format(
@@ -317,8 +355,10 @@ def test_12h_hourly_periodic_signal():
     else:
         db = _step_load(source_npy, base_dir, resource, n_cols,
                         append_chunk_rows, base_epoch)
-    _step_query(db, result_npy, n_cols, base_epoch, resource,
-                query_start_offset_h=5, query_end_offset_h=7)
+    _step_query_readonly(db, n_cols, base_epoch, resource,
+                         query_start_offset_h=5, query_end_offset_h=7)
+    _step_query_write(db, result_npy, n_cols, base_epoch, resource,
+                      query_start_offset_h=5, query_end_offset_h=7)
 
     print("Files written:")
     print("  {}".format(source_npy))
