@@ -236,7 +236,7 @@ def main(host='0.0.0.0', port=80, debug=True):
 
     @app.get('/')
     async def index(request):
-        return send_file('frontend/files_example.html')
+        return send_file('frontend/database_example.html')
 
     # TODO: use static/ prefix - to avoid colliding with api endpoints
     @app.get('/static/<path:path>')

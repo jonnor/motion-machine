@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>microhive</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.1/plotly.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/preact/10.19.3/preact.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/preact/10.19.3/hooks.umd.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0d0d0d;
+    --surface:  #141414;
+    --border:   #242424;
+    --muted:    #444;
+    --text:     #c8c8c8;
+    --bright:   #f0f0f0;
+    --accent:   #00e5a0;
+    --warn:     #ff5f3d;
+    --mono:     'IBM Plex Mono', monospace;
+    --sans:     'IBM Plex Sans', sans-serif;
+  }
+
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; }
+
+  #app { display: flex; flex-direction: column; min-height: 100vh; }
+
+  /* ── Header ── */
+  header {
+    display: flex; align-items: baseline; gap: 24px;
+    padding: 18px 28px; border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 15px; font-weight: 500; letter-spacing: 0.12em; color: var(--bright); }
+  header h1 span { color: var(--accent); }
+  .resource-tag {
+    font-size: 11px; color: var(--muted); letter-spacing: 0.08em;
+  }
+  .status {
+    margin-left: auto; font-size: 11px; display: flex; align-items: center; gap: 8px;
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  .dot.ok  { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .dot.err { background: var(--warn);   box-shadow: 0 0 6px var(--warn); }
+
+  /* ── Controls ── */
+  .controls {
+    display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap;
+    padding: 16px 28px; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  label  { font-size: 10px; letter-spacing: 0.12em; color: var(--muted); text-transform: uppercase; }
+
+  input[type="datetime-local"], input[type="text"] {
+    background: var(--bg); border: 1px solid var(--border); color: var(--bright);
+    font-family: var(--mono); font-size: 12px; padding: 7px 10px;
+    outline: none; width: 220px;
+    transition: border-color 0.15s;
+  }
+  input:focus { border-color: var(--accent); }
+
+  .btn {
+    background: transparent; border: 1px solid var(--accent); color: var(--accent);
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em;
+    padding: 7px 20px; cursor: pointer; transition: background 0.15s, color 0.15s;
+    white-space: nowrap; align-self: flex-end;
+  }
+  .btn:hover:not(:disabled) { background: var(--accent); color: var(--bg); }
+  .btn:disabled { opacity: 0.35; cursor: default; }
+  .btn.secondary {
+    border-color: var(--border); color: var(--muted);
+  }
+  .btn.secondary:hover:not(:disabled) { border-color: var(--text); color: var(--text); background: transparent; }
+
+  /* ── Range hints ── */
+  .range-hint {
+    font-size: 10px; color: var(--muted); align-self: flex-end; padding-bottom: 8px;
+    letter-spacing: 0.04em; line-height: 1.8;
+  }
+  .range-hint span { color: var(--accent); }
+
+  /* ── Chart area ── */
+  .charts { flex: 1; padding: 24px 28px; display: flex; flex-direction: column; gap: 16px; }
+
+  .chart-wrap {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 0;
+  }
+  .chart-label {
+    font-size: 10px; letter-spacing: 0.12em; color: var(--muted); text-transform: uppercase;
+    padding: 10px 14px 0;
+  }
+
+  /* ── Status bar ── */
+  footer {
+    padding: 8px 28px; border-top: 1px solid var(--border);
+    font-size: 10px; color: var(--muted); display: flex; gap: 24px; letter-spacing: 0.06em;
+  }
+  footer span { color: var(--text); }
+
+  /* ── Error ── */
+  .error-bar {
+    margin: 0 28px; padding: 10px 14px;
+    border: 1px solid var(--warn); color: var(--warn); font-size: 11px;
+  }
+
+  /* ── Plotly overrides ── */
+  .js-plotly-plot .plotly { background: transparent !important; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+const { h, render } = preact;
+const { useState, useEffect, useCallback, useRef } = preactHooks;
+
+// ── .npy parser ─────────────────────────────────────────────────────────────
+
+function parseNpy(buffer) {
+  const bytes = new Uint8Array(buffer);
+  // Magic: \x93NUMPY
+  const magic = String.fromCharCode(...bytes.slice(1, 6));
+  if (magic !== 'NUMPY') throw new Error('Not a .npy file');
+  const hlen = bytes[8] | (bytes[9] << 8);
+  const headerStr = new TextDecoder('latin1').decode(bytes.slice(10, 10 + hlen));
+
+  // Parse shape from header string
+  const shapeMatch = headerStr.match(/'shape':\s*\((\d+),\s*(\d+)\)/);
+  if (!shapeMatch) throw new Error('Cannot parse shape from .npy header');
+  const rows = parseInt(shapeMatch[1]);
+  const cols = parseInt(shapeMatch[2]);
+
+  // Data starts after header; int16 = 2 bytes/element
+  const dataOffset = 10 + hlen;
+  const data = new Int16Array(buffer, dataOffset);
+  return { rows, cols, data };
+}
+
+// ── API helpers ──────────────────────────────────────────────────────────────
+
+async function fetchInfo(resource) {
+  const r = await fetch(`/info?resource=${resource}`);
+  if (!r.ok) throw new Error(`/info ${r.status}: ${await r.text()}`);
+  return r.json();
+}
+
+async function fetchQuery(resource, startS, endS) {
+  const url = `/query?resource=${resource}&start=${startS}&end=${endS}&chunk_rows=600`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`/query ${r.status}: ${await r.text()}`);
+  return r.arrayBuffer();
+}
+
+function epochToLocal(s) {
+  // datetime-local input expects "YYYY-MM-DDTHH:MM"
+  return new Date(s * 1000).toISOString().slice(0, 16);
+}
+function localToEpoch(s) {
+  return Math.floor(new Date(s + ':00Z').getTime() / 1000);
+}
+function fmtDuration(seconds) {
+  if (seconds < 60)   return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds/60)}m`;
+  return `${(seconds/3600).toFixed(1)}h`;
+}
+
+// ── Plotly chart ─────────────────────────────────────────────────────────────
+
+const PLOT_LAYOUT_BASE = {
+  paper_bgcolor: 'transparent',
+  plot_bgcolor:  '#0d0d0d',
+  font:  { family: "'IBM Plex Mono', monospace", size: 11, color: '#888' },
+  margin: { t: 12, b: 40, l: 54, r: 16 },
+  xaxis: {
+    gridcolor: '#1e1e1e', linecolor: '#242424', tickcolor: '#242424',
+    type: 'date',
+  },
+  yaxis: {
+    gridcolor: '#1e1e1e', linecolor: '#242424', tickcolor: '#242424',
+    zeroline: false,
+  },
+  height: 220,
+};
+
+const COLORS = ['#00e5a0', '#ff9a3c', '#4d9fff', '#e040fb', '#ffeb3b'];
+
+function Chart({ label, times, values, color }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!ref.current || !times) return;
+    const trace = {
+      x: times, y: values,
+      type: 'scatter', mode: 'lines',
+      line: { color, width: 1.2 },
+      hovertemplate: '%{y}<extra></extra>',
+    };
+    Plotly.react(ref.current, [trace], PLOT_LAYOUT_BASE, { responsive: true, displayModeBar: false });
+  }, [times, values]);
+
+  return h('div', { class: 'chart-wrap' },
+    h('div', { class: 'chart-label' }, label),
+    h('div', { ref, style: { width: '100%' } })
+  );
+}
+
+// ── Main App ─────────────────────────────────────────────────────────────────
+
+function App() {
+  const resource = 'sensor'; // could be a dropdown if multiple resources
+
+  const [info,    setInfo]    = useState(null);
+  const [error,   setError]   = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [startDt, setStartDt] = useState('');
+  const [endDt,   setEndDt]   = useState('');
+  const [series,  setSeries]  = useState(null);  // { times, columns: [{name, values}] }
+  const [stats,   setStats]   = useState(null);
+
+  // Load info on mount
+  useEffect(() => {
+    fetchInfo(resource)
+      .then(info => {
+        setInfo(info);
+        // Default range: last 2 hours of data
+        const end   = info.end;
+        const start = Math.max(info.start, end - 2 * 3600);
+        setStartDt(epochToLocal(start));
+        setEndDt(epochToLocal(end));
+      })
+      .catch(e => setError(e.message));
+  }, []);
+
+  const handleQuery = useCallback(async () => {
+    setError(null);
+    setLoading(true);
+    const t0 = performance.now();
+    try {
+      const startS = localToEpoch(startDt);
+      const endS   = localToEpoch(endDt);
+      if (endS <= startS) throw new Error('end must be after start');
+
+      const buf = await fetchQuery(resource, startS, endS);
+      const { rows, cols, data } = parseNpy(buf);
+
+      // Build timestamp array
+      const hopS = info.hop_us / 1e6;
+      const times = Array.from({ length: rows }, (_, i) =>
+        new Date((startS + i * hopS) * 1000).toISOString()
+      );
+
+      // Split columns
+      const columns = info.columns.map((name, ci) => ({
+        name,
+        values: Array.from({ length: rows }, (_, ri) => data[ri * cols + ci]),
+      }));
+
+      setSeries({ times, columns });
+      setStats({ rows, bytes: buf.byteLength, ms: Math.round(performance.now() - t0) });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [startDt, endDt, info]);
+
+  const setFullRange = () => {
+    if (!info) return;
+    setStartDt(epochToLocal(info.start));
+    setEndDt(epochToLocal(info.end));
+  };
+
+  const connected = info && !error;
+
+  return h('div', { id: 'app' },
+    // Header
+    h('header', null,
+      h('h1', null, 'micro', h('span', null, 'hive')),
+      h('span', { class: 'resource-tag' }, resource),
+      h('div', { class: 'status' },
+        h('div', { class: `dot ${error ? 'err' : info ? 'ok' : ''}` }),
+        error ? 'error' : info ? 'connected' : 'connecting…'
+      )
+    ),
+
+    // Controls
+    h('div', { class: 'controls' },
+      h('div', { class: 'field' },
+        h('label', null, 'Start'),
+        h('input', { type: 'datetime-local', value: startDt,
+          onInput: e => setStartDt(e.target.value) })
+      ),
+      h('div', { class: 'field' },
+        h('label', null, 'End'),
+        h('input', { type: 'datetime-local', value: endDt,
+          onInput: e => setEndDt(e.target.value) })
+      ),
+      info && h('div', { class: 'range-hint' },
+        `available  `, h('br', null),
+        h('span', null, epochToLocal(info.start).replace('T', ' ')),
+        ` → `,
+        h('span', null, epochToLocal(info.end).replace('T', ' ')),
+        h('br', null),
+        `${info.n_partitions} partitions · ${info.granularity} · ${info.hop_us / 1000}ms hop`
+      ),
+      h('button', { class: 'btn secondary', onClick: setFullRange, disabled: !info }, 'full range'),
+      h('button', { class: 'btn', onClick: handleQuery, disabled: loading || !info },
+        loading ? 'loading…' : 'query'
+      ),
+    ),
+
+    // Error
+    error && h('div', { class: 'error-bar' }, error),
+
+    // Charts
+    h('div', { class: 'charts' },
+      series
+        ? series.columns.map((col, i) =>
+            h(Chart, {
+              key: col.name,
+              label: col.name,
+              times: series.times,
+              values: col.values,
+              color: COLORS[i % COLORS.length],
+            })
+          )
+        : h('div', { style: { color: 'var(--muted)', padding: '40px 0', textAlign: 'center', letterSpacing: '0.1em' } },
+            info ? 'select a time range and press query' : 'connecting to device…'
+          )
+    ),
+
+    // Footer stats
+    h('footer', null,
+      stats && h('div', null, 'rows ', h('span', null, stats.rows.toLocaleString())),
+      stats && h('div', null, 'bytes ', h('span', null, stats.bytes.toLocaleString())),
+      stats && h('div', null, 'fetch ', h('span', null, `${stats.ms}ms`)),
+      info  && h('div', null, 'columns ', h('span', null, info.columns.join(', '))),
+    )
+  );
+}
+
+render(h(App, null), document.getElementById('app'));
+</script>
+</body>
+</html>
