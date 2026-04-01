@@ -169,17 +169,19 @@ def _enumerate_partitions(base_dir, resource_name, granularity):
 def _partitions_in_range(base_dir, resource_name, granularity, start_s, end_s):
     """
     Yield (partition_key, partition_dir, part_start_s, part_end_s)
-    for partitions whose time range overlaps [start_s, end_s].
-    Only enumerates directories that can possibly overlap.
+    for all partitions covering [start_s, end_s), computed from the time range.
+    No directory listing — paths are derived arithmetically from timestamps.
     """
     dur = _partition_duration_s(granularity)
-    for key, pdir in _enumerate_partitions(base_dir, resource_name, granularity):
-        ps = _partition_start_epoch(key)
-        pe = ps + dur
-        if ps >= end_s:
-            break  # sorted order: no more partitions can overlap
-        if pe > start_s:
-            yield key, pdir, ps, pe
+    # Align start down to the partition boundary
+    ps = (start_s // dur) * dur
+    while ps < end_s:
+        pe  = ps + dur
+        key = _epoch_to_partition_key(ps, granularity)
+        pdir = _partition_dir(base_dir, resource_name, granularity,
+                              key[0], key[1], key[2], key[3], key[4])
+        yield key, pdir, ps, pe
+        ps = pe
 
 # ---------------------------------------------------------------------------
 # File row count helper
@@ -304,13 +306,15 @@ class MicroHive:
         t_read_ms   = 0  # f.read() + array.frombytes() inside npyfile
         t_copy_ms   = 0  # copying disk_buf into preallocated yield buf
         t_yield_ms  = 0  # time caller spends suspended between yields
-        t_alloc_ms  = 0  # array allocation
         n_partitions = 0
         n_rows_skipped = 0
         n_rows_read = 0
 
-        buf = None   # preallocated on first use, sized to chunk_rows
+        # Allocate yield buffer once for the entire query; reuse across all partitions/yields
+        t_a = _ticks_ms()
+        buf = array.array(TYPECODE, [0] * (chunk_rows * n_cols))
         buf_rows = 0
+        t_alloc_ms = _ticks_diff(_ticks_ms(), t_a)
 
         t0 = _ticks_ms()
 
@@ -357,12 +361,6 @@ class MicroHive:
                         break  # read_data_chunks gave us exactly row_start rows in one go
                     t_skip_ms += _ticks_diff(_ticks_ms(), t_s)
 
-                # Preallocate yield buffer; reuse across chunks from this partition
-                if buf is None:
-                    t_a = _ticks_ms()
-                    buf = array.array(TYPECODE, [0] * (chunk_rows * n_cols))
-                    t_alloc_ms += _ticks_diff(_ticks_ms(), t_a)
-
                 rows_remaining = rows_needed
                 disk_iter = r.read_data_chunks(disk_chunk_rows * n_cols)
                 while rows_remaining > 0:
@@ -379,8 +377,7 @@ class MicroHive:
 
                     t_copy = _ticks_ms()
                     base = buf_rows * n_cols
-                    for i in range(items_got):
-                        buf[base + i] = disk_buf[i]
+                    buf[base:base + items_got] = disk_buf
                     buf_rows += rows_got
                     t_copy_ms += _ticks_diff(_ticks_ms(), t_copy)
 
@@ -390,9 +387,6 @@ class MicroHive:
                         t_before = _ticks_ms()
                         yield buf
                         t_yield_ms += _ticks_diff(_ticks_ms(), t_before)
-                        t_a = _ticks_ms()
-                        buf = array.array(TYPECODE, [0] * (chunk_rows * n_cols))
-                        t_alloc_ms += _ticks_diff(_ticks_ms(), t_a)
                         buf_rows = 0
 
         if buf_rows > 0:
