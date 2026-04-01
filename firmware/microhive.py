@@ -289,6 +289,7 @@ class MicroHive:
                 self._base, resource, gran, start_s, end_s):
 
             path = _data_file(pdir, resource)
+            print('open', path)
             try:
                 reader = npyfile.Reader(path)
             except OSError:
@@ -344,12 +345,14 @@ class MicroHive:
     # Append
     # ------------------------------------------------------------------
 
-    def append_data(self, resource, data):
+    def append_data(self, resource, data, timestamp_s=None):
         """
-        Append rows to the current time partition.
+        Append rows to the appropriate time partition.
         data: flat array.array('h') in row-major order.
         Length must be a multiple of len(columns).
-        Raises ValueError on bad input or out-of-order time (future: explicit ts).
+        timestamp_s: Unix epoch seconds for the first sample. Defaults to time.time().
+                     Pass explicitly when loading historical data.
+        Raises ValueError on bad input or out-of-order writes.
         Auto-splits across partition boundaries.
         """
         cfg = self._res(resource)
@@ -364,11 +367,11 @@ class MicroHive:
                 "data length {} not a multiple of column count {}".format(len(data), n_cols))
 
         n_rows = len(data) // n_cols
-        now_s = time.time()
+        now_s = timestamp_s if timestamp_s is not None else time.time()
         dur_s = _partition_duration_s(gran)
         hop_s_float = hop_us / 1_000_000.0
 
-        # Determine which partition current time falls into
+        # Determine which partition this timestamp falls into
         current_key = _epoch_to_partition_key(now_s, gran)
         part_start_s = _partition_start_epoch(current_key)
         part_end_s = part_start_s + dur_s
@@ -382,7 +385,6 @@ class MicroHive:
         self._last_partition[resource] = current_key
 
         # Check if data spans a partition boundary
-        # Time of last sample: now_s + (n_rows - 1) * hop_s
         last_sample_s = now_s + (n_rows - 1) * hop_s_float
 
         if last_sample_s < part_end_s:
@@ -394,7 +396,7 @@ class MicroHive:
             path = _data_file(pdir, resource)
             _append_rows_to_file(path, data, n_cols)
         else:
-            # Split: find how many rows fit in current partition
+            # Split: write rows that fit in current partition, recurse for the rest
             remaining_s = part_end_s - now_s
             rows_in_current = max(0, int(remaining_s / hop_s_float))
 
@@ -407,19 +409,10 @@ class MicroHive:
                 path = _data_file(pdir, resource)
                 _append_rows_to_file(path, chunk1, n_cols)
 
-            # Recurse for remaining rows into next partition(s)
             remaining_data = array.array(TYPECODE, data[rows_in_current * n_cols:])
             if len(remaining_data) > 0:
-                # Temporarily advance "now" to next partition start for key calculation
-                next_key = _epoch_to_partition_key(part_end_s, gran)
-                next_key_s = _partition_start_epoch(next_key)
-                next_pdir = _partition_dir(self._base, resource, gran,
-                                           next_key[0], next_key[1], next_key[2],
-                                           next_key[3], next_key[4])
-                _makedirs(next_pdir)
-                next_path = _data_file(next_pdir, resource)
-                _append_rows_to_file(next_path, remaining_data, n_cols)
-                self._last_partition[resource] = next_key
+                self.append_data(resource, remaining_data,
+                                 timestamp_s=part_end_s)
 
     # ------------------------------------------------------------------
     # Info / debug

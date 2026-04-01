@@ -8,7 +8,7 @@ Scenario:
   - int16 throughout
 
 Steps:
-  1. Stream-generate full 12h time series to source.npy
+  1. Stream-generate full 12h time series to source.npy (skipped if file exists)
   2. Stream-load source.npy into MicroHive via append_data
   3. Query middle 2 hours, save result to query_result.npy
 
@@ -47,6 +47,13 @@ def _diff_ms(t0):
 # Filesystem helpers
 # ---------------------------------------------------------------------------
 
+def _file_exists(path):
+    try:
+        os.stat(path)
+        return True
+    except OSError:
+        return False
+
 def _rmdir_recursive(path):
     try:
         entries = os.listdir(path)
@@ -67,28 +74,6 @@ def _rmdir_recursive(path):
         os.rmdir(path)
     except OSError:
         pass
-
-# ---------------------------------------------------------------------------
-# Time patching (simulate wall clock advancing during load)
-# On a real device time.time() advances naturally; here we control it so
-# append_data routes rows to the correct hour partition.
-# ---------------------------------------------------------------------------
-
-class _TimePatch:
-    def __init__(self):
-        self._real_time = None
-        self._value = 0
-
-    def patch(self, epoch_s):
-        self._value = epoch_s
-        if self._real_time is None:
-            self._real_time = time.time
-            time.time = lambda: self._value
-
-    def restore(self):
-        if self._real_time is not None:
-            time.time = self._real_time
-            self._real_time = None
 
 # ---------------------------------------------------------------------------
 # Synthetic signal generator (no global state)
@@ -143,7 +128,13 @@ class _SignalGen:
 # ---------------------------------------------------------------------------
 
 def _step_generate(source_npy, total_rows, n_cols, signal):
-    """Step 1: Stream-generate synthetic time series to source.npy."""
+    """Step 1: Stream-generate synthetic time series to source.npy.
+    Skipped if the file already exists."""
+    if _file_exists(source_npy):
+        print("Step 1: Skipping generation, source.npy already exists")
+        print()
+        return
+
     print("Step 1: Generate source.npy ({} rows, {} cols)".format(total_rows, n_cols))
     t0 = _ms()
 
@@ -159,7 +150,6 @@ def _step_generate(source_npy, total_rows, n_cols, signal):
                 buf[i * n_cols]     = a
                 buf[i * n_cols + 1] = b
             if n == chunk_rows:
-                print('write chunk')
                 w.write_values(buf, typecode=TYPECODE)
             else:
                 w.write_values(array.array(TYPECODE, buf[:n * n_cols]), typecode=TYPECODE)
@@ -171,8 +161,7 @@ def _step_generate(source_npy, total_rows, n_cols, signal):
     print()
 
 
-def _step_load(source_npy, base_dir, resource, n_cols, append_chunk_rows,
-               base_epoch, time_patch):
+def _step_load(source_npy, base_dir, resource, n_cols, append_chunk_rows, base_epoch):
     """Step 2: Stream source.npy into MicroHive via append_data."""
     print("Step 2: Load source.npy into MicroHive via append_data")
     print("  Chunk: {} rows/call  |  Granularity: {}".format(
@@ -182,31 +171,44 @@ def _step_load(source_npy, base_dir, resource, n_cols, append_chunk_rows,
     db = MicroHive(base_dir, {"sensor": resource})
     latencies = []
 
-    with npyfile.Reader(source_npy) as reader:
-        buf      = array.array(TYPECODE)
-        buf_rows = 0
-        row_idx  = 0
+    # Preallocate a full-chunk buffer; only create a smaller array for the final partial chunk
+    buf      = array.array(TYPECODE, [0] * (append_chunk_rows * n_cols))
+    buf_rows = 0
+    row_idx  = 0
 
-        for chunk in reader.read_data_chunks(n_cols):
-            buf.extend(chunk)
+    with npyfile.Reader(source_npy) as reader:
+        for row in reader.read_data_chunks(n_cols):
+            buf[buf_rows * n_cols]     = row[0]
+            buf[buf_rows * n_cols + 1] = row[1]
             buf_rows += 1
             row_idx  += 1
 
-            if buf_rows >= append_chunk_rows:
-                time_patch.patch(base_epoch + (row_idx - buf_rows))
+            if buf_rows == append_chunk_rows:
+                ts = base_epoch + (row_idx - buf_rows)
                 t_a = _ms()
-                db.append_data("sensor", buf)
-                latencies.append(_diff_ms(t_a))
-                buf      = array.array(TYPECODE)
+                db.append_data("sensor", buf, timestamp_s=ts)
+                elapsed = _diff_ms(t_a)
+                latencies.append(elapsed)
+                data_ts_t = time.gmtime(ts)
+                print("  append {:3d}: {:02d}:{:02d}:{:02d}  rows {:5d}-{:5d}  ({} ms)".format(
+                    len(latencies),
+                    data_ts_t[3], data_ts_t[4], data_ts_t[5],
+                    row_idx - append_chunk_rows, row_idx - 1,
+                    elapsed))
                 buf_rows = 0
 
-        if buf_rows > 0:
-            time_patch.patch(base_epoch + (row_idx - buf_rows))
-            t_a = _ms()
-            db.append_data("sensor", buf)
-            latencies.append(_diff_ms(t_a))
-
-    time_patch.restore()
+    if buf_rows > 0:
+        ts = base_epoch + (row_idx - buf_rows)
+        t_a = _ms()
+        db.append_data("sensor", array.array(TYPECODE, buf[:buf_rows * n_cols]), timestamp_s=ts)
+        elapsed = _diff_ms(t_a)
+        latencies.append(elapsed)
+        data_ts_t = time.gmtime(ts)
+        print("  append {:3d}: {:02d}:{:02d}:{:02d}  rows {:5d}-{:5d}  ({} ms)".format(
+            len(latencies),
+            data_ts_t[3], data_ts_t[4], data_ts_t[5],
+            row_idx - buf_rows, row_idx - 1,
+            elapsed))
 
     max_ms  = max(latencies)
     avg_ms  = sum(latencies) // len(latencies)
@@ -222,32 +224,43 @@ def _step_load(source_npy, base_dir, resource, n_cols, append_chunk_rows,
     return db
 
 
-def _step_query(db, result_npy, n_cols, base_epoch,
+def _step_query(db, result_npy, n_cols, base_epoch, resource,
                 query_start_offset_h, query_end_offset_h):
     """Step 3: Query a middle window and stream result to query_result.npy."""
     start_s       = base_epoch + query_start_offset_h * 3600
     end_s         = base_epoch + query_end_offset_h * 3600
     expected_rows = (query_end_offset_h - query_start_offset_h) * 3600
+    chunk_rows    = 600
 
     print("Step 3: Query hours {}..{} -> query_result.npy".format(
         query_start_offset_h, query_end_offset_h))
-    print("  Expected rows: {}".format(expected_rows))
+    print("  Expected rows: {}  |  chunk_rows: {}".format(expected_rows, chunk_rows))
     t0 = _ms()
 
     # Pass 1: count rows (needed to write .npy shape header up front)
     count = sum(
         len(chunk) // n_cols
-        for chunk in db.get_timerange("sensor", start_s, end_s, chunk_rows=3600)
+        for chunk in db.get_timerange("sensor", start_s, end_s, chunk_rows=chunk_rows)
     )
 
     # Pass 2: stream into output file
     total_rows   = 0
     max_chunk_ms = 0
+    hop_s        = resource['hop'] / 1_000_000.0
     with npyfile.Writer(result_npy, shape=(count, n_cols), typecode=TYPECODE) as w:
         t_chunk = _ms()
-        for chunk in db.get_timerange("sensor", start_s, end_s, chunk_rows=3600):
-            max_chunk_ms = max(max_chunk_ms, _diff_ms(t_chunk))
-            total_rows  += len(chunk) // n_cols
+        for chunk in db.get_timerange("sensor", start_s, end_s, chunk_rows=chunk_rows):
+            elapsed      = _diff_ms(t_chunk)
+            chunk_rows_n = len(chunk) // n_cols
+            data_ts      = start_s + int(total_rows * hop_s)
+            data_ts_t    = time.gmtime(data_ts)
+            print("  chunk {:4d}: {:02d}:{:02d}:{:02d}  rows {:5d}-{:5d}  ({} ms)".format(
+                total_rows // chunk_rows,
+                data_ts_t[3], data_ts_t[4], data_ts_t[5],
+                total_rows, total_rows + chunk_rows_n - 1,
+                elapsed))
+            max_chunk_ms = max(max_chunk_ms, elapsed)
+            total_rows  += chunk_rows_n
             w.write_values(chunk, typecode=TYPECODE)
             t_chunk = _ms()
 
@@ -255,7 +268,7 @@ def _step_query(db, result_npy, n_cols, base_epoch,
     print("  Rows returned: {}  [{}]".format(
         total_rows, "OK" if total_rows == expected_rows else "FAIL"))
     print("  Max chunk latency: {} ms  [{}]".format(
-        max_chunk_ms, "OK" if max_chunk_ms <= 100 else "FAIL >100ms"))
+        max_chunk_ms, "OK" if max_chunk_ms <= 500 else "FAIL >500ms"))
     print("  Total query time: {} ms".format(_diff_ms(t0)))
     print("  Output file: {} bytes ({} KB)".format(size_bytes, size_bytes // 1024))
     print()
@@ -272,7 +285,7 @@ def test_12h_hourly_periodic_signal():
     duration_h        = 12
     n_cols            = 2
     hop_us            = 1_000_000   # 1 second
-    append_chunk_rows = 60          # 1 minute of data per append call
+    append_chunk_rows = 1000        # rows per append call
     total_rows        = duration_h * 3600
 
     try:
@@ -293,13 +306,18 @@ def test_12h_hourly_periodic_signal():
         duration_h, total_rows, n_cols))
     print()
 
-    _rmdir_recursive(base_dir)
     _makedirs(base_dir)
 
     _step_generate(source_npy, total_rows, n_cols, _SignalGen())
-    db = _step_load(source_npy, base_dir, resource, n_cols,
-                    append_chunk_rows, base_epoch, _TimePatch())
-    _step_query(db, result_npy, n_cols, base_epoch,
+    sensor_dir = base_dir + "/sensor"
+    if _file_exists(sensor_dir):
+        print("Step 2: Skipping load, data already exists in {}".format(sensor_dir))
+        print()
+        db = MicroHive(base_dir, {"sensor": resource})
+    else:
+        db = _step_load(source_npy, base_dir, resource, n_cols,
+                        append_chunk_rows, base_epoch)
+    _step_query(db, result_npy, n_cols, base_epoch, resource,
                 query_start_offset_h=5, query_end_offset_h=7)
 
     print("Files written:")

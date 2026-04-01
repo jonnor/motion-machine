@@ -1,4 +1,10 @@
 
+# Timeseries database
+
+- add a timeseries API with microdot, test with frontend
+- test with asyncio, and ensure all work is chunk based
+If neccesary, allow specifying yield function internally? 
+
 # emlearn-micropython WASM build and load
 
 https://github.com/emlearn/emlearn-micropython/tree/gh-pages/builds/v0.10.1/ports/webassembly
