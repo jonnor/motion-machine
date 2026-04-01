@@ -240,10 +240,20 @@
 
 
   <!-- PyScript MicroPython -->
+  <!-- Use local build - includes emlearn-micropython etc -->
+
+  <mpy-config>
+    interpreter = "/micropython.mjs"
+   </mpy-config>
 
   <script type="mpy">
 from pyscript import window
 from pyscript.ffi import to_js
+
+help('modules')
+
+import emlearn_fft
+import pathlib
 
 def process(data):
     value = int(data["value"])
@@ -254,6 +264,9 @@ def process(data):
         "binary":  bin(value),
     }
     return to_js(result)
+
+p = process(dict(value=33))
+print('res', p)
 
 window.pyProcess = process
   </script>
