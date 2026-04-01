@@ -2,3 +2,4 @@ microdot.py
 micropython.wasm
 micropython.mjs
 npyfile.py
+secrets.py

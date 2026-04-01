@@ -18,7 +18,7 @@ MicroPython note:
 """
 
 import struct
-from microdot import Microdot
+from microdot import Microdot, Response
 from microhive import TYPECODE, _enumerate_partitions, _partition_start_epoch, _partition_duration_s
 
 # ---------------------------------------------------------------------------
@@ -84,11 +84,67 @@ class _NpyStreamGenerator:
 # Routes
 # ---------------------------------------------------------------------------
 
+def apply_cors(res, allow_origin='*', expose_headers=None):
+
+    # ✅ Add CORS headers (do NOT overwrite existing ones)
+    if "Access-Control-Allow-Origin" not in res.headers:
+        res.headers["Access-Control-Allow-Origin"] = allow_origin
+
+    if "Access-Control-Allow-Methods" not in res.headers:
+        res.headers["Access-Control-Allow-Methods"] = \
+            "GET, POST, PUT, DELETE, OPTIONS"
+
+    # Echo requested headers if present
+    req_headers = None # FIXME request.headers.get("Access-Control-Request-Headers")
+    if req_headers:
+        res.headers["Access-Control-Allow-Headers"] = req_headers
+    elif "Access-Control-Allow-Headers" not in res.headers:
+        res.headers["Access-Control-Allow-Headers"] = \
+            "Content-Type, Authorization"
+
+    # Optional: expose headers
+    if expose_headers and "Access-Control-Expose-Headers" not in res.headers:
+        res.headers["Access-Control-Expose-Headers"] = \
+            ", ".join(expose_headers)
+
+
+def cors(allow_origin="*", expose_headers=None):
+    def decorator(handler):
+
+        def wrapped(request, *args, **kwargs):
+
+            # ✅ Handle preflight
+            if request.method == "OPTIONS":
+                res = Response(status_code=204)
+            else:
+                res = handler(request, *args, **kwargs)
+
+                type_name = type(res).__name__
+                if 'generator' in type_name:
+                    # NOTE: for generators, apply_cors must be called manually
+                    return res
+
+                # Normalize to Response
+                if not isinstance(res, Response) :
+                    res = Response(*res)
+
+            apply_cors(res, allow_origin, expose_headers)
+            return res
+
+        return wrapped
+
+    return decorator
+
+
+
 def add_routes(app, db):
     """Register MicroHive routes on an existing Microdot app."""
 
-    @app.get('/info')
+    @app.route('/info', methods=["GET", "OPTIONS"])
+    @cors()
     async def info(request):
+        print('info hit')
+
         resource = request.args.get('resource')
 
         if not resource:
@@ -126,8 +182,11 @@ def add_routes(app, db):
             'hop_us':       cfg['hop'],
         }, 200
 
-    @app.get('/query')
+    @app.route('/query', methods=["GET", "OPTIONS"])
+    @cors()
     async def query(request):
+        print('query hit')
+
         resource   = request.args.get('resource')
         start_s    = request.args.get('start')
         end_s      = request.args.get('end')
@@ -152,10 +211,15 @@ def add_routes(app, db):
         gen = _NpyStreamGenerator(db, resource, start_s, end_s,
                                   chunk_rows, n_cols, hop_us)
 
-        return gen, 200, {
+        print('return generator')
+        r = Response(gen, 200, {
             'Content-Type': 'application/octet-stream',
             'Content-Disposition': 'attachment; filename="{}.npy"'.format(resource),
-        }
+        })
+        apply_cors(r)
+        return r
+
+
 
 # ---------------------------------------------------------------------------
 # WiFi
@@ -186,6 +250,7 @@ async def _connect_wifi():
         await asyncio.sleep(0.5)
 
     print('WiFi connected:', wlan.ifconfig()[0])
+
 
 # ---------------------------------------------------------------------------
 # Main
