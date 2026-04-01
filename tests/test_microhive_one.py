@@ -316,7 +316,7 @@ def _step_query_write(db, result_npy, n_cols, base_epoch, resource,
 # ---------------------------------------------------------------------------
 
 def test_12h_hourly_periodic_signal():
-    base_dir   = "/tmp/microhive_rw" if sys.platform != "esp32" else "/mw_rw"
+    base_dir   = "data/mw_rw" if sys.platform != "esp32" else "/mw_rw"
     source_npy = base_dir + "/source.npy"
     result_npy = base_dir + "/query_result.npy"
 

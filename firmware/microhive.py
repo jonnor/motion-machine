@@ -45,19 +45,27 @@ except ImportError:
 # Time helpers
 # ---------------------------------------------------------------------------
 
+# MicroPython's time epoch is 2000-01-01; Unix epoch is 1970-01-01.
+# All public API uses Unix epoch. This offset converts between them.
+try:
+    import sys as _sys
+    _EPOCH_OFFSET = 946684800 if _sys.implementation.name == 'micropython' else 0
+except AttributeError:
+    _EPOCH_OFFSET = 0
+
 def _epoch_to_parts(epoch_s):
-    """Convert Unix epoch seconds to (year, month, day, hour, minute, second)."""
-    t = time.gmtime(epoch_s)
+    """Convert Unix epoch seconds to (year, month, day, hour, minute, second).
+    Subtracts MicroPython epoch offset before passing to gmtime."""
+    t = time.gmtime(epoch_s - _EPOCH_OFFSET)
     return t[0], t[1], t[2], t[3], t[4], t[5]
 
 def _parts_to_epoch(year, month, day, hour=0, minute=0, second=0):
-    """Convert UTC calendar parts to Unix epoch seconds (MicroPython compatible)."""
-    # MicroPython time.mktime expects a tuple of 8 elements
-    # MicroPython: 8-tuple. CPython: 9-tuple with DST=-1. Try both.
+    """Convert UTC calendar parts to Unix epoch seconds.
+    Adds MicroPython epoch offset to mktime result."""
     try:
-        return int(time.mktime((year, month, day, hour, minute, second, 0, 0)))
+        return int(time.mktime((year, month, day, hour, minute, second, 0, 0))) + _EPOCH_OFFSET
     except TypeError:
-        return int(time.mktime((year, month, day, hour, minute, second, 0, 0, -1)))
+        return int(time.mktime((year, month, day, hour, minute, second, 0, 0, -1))) + _EPOCH_OFFSET
 
 def _partition_epoch(year, month, day, hour=0, minute=0):
     """Epoch seconds for the start of a partition."""
