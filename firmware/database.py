@@ -18,8 +18,11 @@ MicroPython note:
 """
 
 import struct
-from microdot import Microdot, Response
+from microdot import Microdot, Response, send_file
+
 from microhive import TYPECODE, _enumerate_partitions, _partition_start_epoch, _partition_duration_s
+from files import cors, apply_cors
+import files
 
 # ---------------------------------------------------------------------------
 # Minimal .npy header writer (little-endian int16, C order, 2D)
@@ -83,58 +86,6 @@ class _NpyStreamGenerator:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
-
-def apply_cors(res, allow_origin='*', expose_headers=None):
-
-    # ✅ Add CORS headers (do NOT overwrite existing ones)
-    if "Access-Control-Allow-Origin" not in res.headers:
-        res.headers["Access-Control-Allow-Origin"] = allow_origin
-
-    if "Access-Control-Allow-Methods" not in res.headers:
-        res.headers["Access-Control-Allow-Methods"] = \
-            "GET, POST, PUT, DELETE, OPTIONS"
-
-    # Echo requested headers if present
-    req_headers = None # FIXME request.headers.get("Access-Control-Request-Headers")
-    if req_headers:
-        res.headers["Access-Control-Allow-Headers"] = req_headers
-    elif "Access-Control-Allow-Headers" not in res.headers:
-        res.headers["Access-Control-Allow-Headers"] = \
-            "Content-Type, Authorization"
-
-    # Optional: expose headers
-    if expose_headers and "Access-Control-Expose-Headers" not in res.headers:
-        res.headers["Access-Control-Expose-Headers"] = \
-            ", ".join(expose_headers)
-
-
-def cors(allow_origin="*", expose_headers=None):
-    def decorator(handler):
-
-        def wrapped(request, *args, **kwargs):
-
-            # ✅ Handle preflight
-            if request.method == "OPTIONS":
-                res = Response(status_code=204)
-            else:
-                res = handler(request, *args, **kwargs)
-
-                type_name = type(res).__name__
-                if 'generator' in type_name:
-                    # NOTE: for generators, apply_cors must be called manually
-                    return res
-
-                # Normalize to Response
-                if not isinstance(res, Response) :
-                    res = Response(*res)
-
-            apply_cors(res, allow_origin, expose_headers)
-            return res
-
-        return wrapped
-
-    return decorator
-
 
 
 def add_routes(app, db):
@@ -271,7 +222,29 @@ def main(host='0.0.0.0', port=80, debug=True):
 
     app = Microdot()
     add_routes(app, db)
+    
+    # File handling
+    def on_file_changed(path, event):
+        print(f'File {event}: {path}')
 
+
+    files.add_routes(app, base_dir='notebooks/', on_file_changed=on_file_changed)
+
+
+    # User interface
+    MAX_AGE = 1 # XXX: set longer in production, for more efficient caching
+
+    @app.get('/')
+    async def index(request):
+        return send_file('frontend/files_example.html')
+
+    # TODO: use static/ prefix - to avoid colliding with api endpoints
+    @app.get('/static/<path:path>')
+    async def static(request, path):
+        return send_file('frontend/' + path, max_age=MAX_AGE)
+
+
+    # Actually start server
     async def _startup():
         await _connect_wifi()
         print('MicroHive HTTP server on {}:{}'.format(host, port))

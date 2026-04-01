@@ -2,7 +2,59 @@
 import os
 from microdot import Microdot, Response, send_file
 
-DEFAULT_CHUNK_SIZE = 1024
+DEFAULT_CHUNK_SIZE = 1024 # LittleFS block size is 4kB
+
+
+def apply_cors(res, allow_origin='*', expose_headers=None):
+
+    # ✅ Add CORS headers (do NOT overwrite existing ones)
+    if "Access-Control-Allow-Origin" not in res.headers:
+        res.headers["Access-Control-Allow-Origin"] = allow_origin
+
+    if "Access-Control-Allow-Methods" not in res.headers:
+        res.headers["Access-Control-Allow-Methods"] = \
+            "GET, POST, PUT, DELETE, OPTIONS"
+
+    # Echo requested headers if present
+    req_headers = None # FIXME request.headers.get("Access-Control-Request-Headers")
+    if req_headers:
+        res.headers["Access-Control-Allow-Headers"] = req_headers
+    elif "Access-Control-Allow-Headers" not in res.headers:
+        res.headers["Access-Control-Allow-Headers"] = \
+            "Content-Type, Authorization"
+
+    # Optional: expose headers
+    if expose_headers and "Access-Control-Expose-Headers" not in res.headers:
+        res.headers["Access-Control-Expose-Headers"] = \
+            ", ".join(expose_headers)
+
+
+def cors(allow_origin="*", expose_headers=None):
+    def decorator(handler, *dargs, **dkwargs):
+
+        def wrapped(request, *args, **kwargs):
+
+            # ✅ Handle preflight
+            if request.method == "OPTIONS":
+                res = Response(status_code=204)
+            else:
+                res = handler(request, *args, **kwargs)
+
+                type_name = type(res).__name__
+                if 'generator' in type_name:
+                    # NOTE: for generators, apply_cors must be called manually
+                    return res
+
+                # Normalize to Response
+                if not isinstance(res, Response) :
+                    res = Response(*res)
+
+            apply_cors(res, allow_origin, expose_headers)
+            return res
+
+        return wrapped
+
+    return decorator
 
 
 def safe_path(base_dir, path):
@@ -64,7 +116,8 @@ def add_routes(app, base_dir='/files', default_chunk_size=DEFAULT_CHUNK_SIZE, on
             except Exception as e:
                 print('on_file_changed error:', e)
 
-    @app.get('/files')
+    @app.route('/files', methods=["GET", "OPTIONS"])
+    @cors()
     def list_files(request):
         try:
             files = []
@@ -78,23 +131,28 @@ def add_routes(app, base_dir='/files', default_chunk_size=DEFAULT_CHUNK_SIZE, on
         except OSError as e:
             return {'error': str(e)}, 500
 
-    @app.get('/files/<path:path>')
-    def read_file(request, path):
+    @app.route('/files/<path:path>', methods=["GET", "OPTIONS"])
+    @cors()
+    def read_file(request, path=None):
         full_path = safe_path(base_dir, path)
         if not full_path:
             return {'error': 'Invalid path'}, 400
         try:
             os.stat(full_path)
         except OSError:
+            print('file not found', path, full_path)
             return {'error': 'Not found'}, 404
 
         chunk_size = get_chunk_size(request, default_chunk_size)
-        return Response(
+        r = Response(
             body=file_generator(full_path, chunk_size),
             headers={'Content-Type': 'application/octet-stream'}
         )
+        apply_cors(r) # manual for generators
+        return r
 
-    @app.put('/files/<path:path>')
+    @app.route('/files/<path:path>', methods=["PUT", "OPTIONS"])
+    @cors()
     def write_file(request, path):
         full_path = safe_path(base_dir, path)
         if not full_path:
@@ -116,7 +174,8 @@ def add_routes(app, base_dir='/files', default_chunk_size=DEFAULT_CHUNK_SIZE, on
         notify(full_path, 'write')
         return {'status': 'ok', 'path': full_path}, 201
 
-    @app.delete('/files/<path:path>')
+    @app.route('/files/<path:path>', methods=["DELETE", "OPTIONS"])
+    @cors()
     def delete_file(request, path):
         full_path = safe_path(base_dir, path)
         if not full_path:
@@ -130,24 +189,3 @@ def add_routes(app, base_dir='/files', default_chunk_size=DEFAULT_CHUNK_SIZE, on
         return {'status': 'ok'}, 200
 
 
-# ── Usage examples ─────────────────────────────────────────────────────────────
-
-if __name__ == '__main__':
-    app = Microdot()
-
-    MAX_AGE = 1 # set longer in production
-    def on_changed(path, event):
-        print(f'File {event}: {path}')
-
-    add_routes(app, base_dir='data/', on_file_changed=on_changed)
-
-    @app.get('/')
-    async def index(request):
-        return send_file('frontend/files_example.html')
-
-    # TODO: use static/ prefix - to avoid colliding with api endpoints
-    @app.get('/<path:path>')
-    async def static(request, path):
-        return send_file('frontend/' + path, max_age=MAX_AGE)
-
-    app.run(host='0.0.0.0', port=5000)

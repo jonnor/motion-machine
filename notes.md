@@ -1,14 +1,35 @@
 
 # Timeseries database
 
-- try fetching data from device using JupyterLite
 - add frontend for fetching timeseries using API
 - load some real data - compute metrics over overlapped windows and store. PAMAP2
 - add rollup hooks, push raw accelerometer data, add window computations there
 
+- Add link/button for "Open in Jupyter"
+
+# Opening notebook with JupyterLite
+
+there is a fromURL parameter for this
+https://jupyterlite.readthedocs.io/en/stable/howto/content/open-url-parameter.html
+
+But it does not seem to be supported on the scikit-learn instance
+http://scikit-learn.org/stable/lite/lab/?fromURL=http://github.com/jakevdp/PythonDataScienceHandbook/raw/refs/heads/master/notebooks/05.02-Introducing-Scikit-Learn.ipynb
+
+But it does seem to be working on the Jupyter.org one
+https://jupyter.org/try-jupyter/lab/index.html?fromURL=https://raw.githubusercontent.com/jakevdp/PythonDataScienceHandbook/master/notebooks/05.02-Introducing-Scikit-Learn.ipynb
+
+http://jupyter.org/try-jupyter/lab/index.html?fromURL=http://raw.githubusercontent.com/jakevdp/PythonDataScienceHandbook/master/notebooks/05.02-Introducing-Scikit-Learn.ipynb
+
+Does it work with a local URL? Yes! As long as has CORS
+http://jupyter.org/try-jupyter/lab/index.html?fromURL=http://localhost:8080/notebooks/Untitled.ipynb
+
+And with on-device URL? YES!
+http://jupyter.org/try-jupyter/lab/index.html?fromURL=http://192.168.87.141/files/Untitled.ipynb
+
+
 # Loading data with JupyterLite
 
-! works only with HTTP - not with HTTPS 
+! works only with HTTP - not with HTTPS
 Because our device uses HTTP, browser restriction
 
 http://scikit-learn.org/stable/lite/lab/
