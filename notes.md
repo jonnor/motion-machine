@@ -4,12 +4,19 @@
 - compute metrics over overlapped windows
 - push the metrics into datastore over HTTP API
 
-- Fix emlearn package for JupyterLite
 - test uploading a RandomForest model made with emlearn, from JupyterLite
 
 - add rollup hooks, push raw accelerometer data, integrate window computations
 
 - Add link/button for "Open in Jupyter"
+
+
+# Running emlearn on JupyterLite
+
+emlearn 0.23.2 provides a Python-only wheel.
+Can be installed with JupyterLite.
+Can use .convert(format='csv')
+
 
 
 # Running on T-Watch S3

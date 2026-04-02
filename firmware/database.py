@@ -18,11 +18,15 @@ MicroPython note:
 """
 
 import struct
+import asyncio
+import time
+
 from microdot import Microdot, Response, send_file
 
 from microhive import TYPECODE, _enumerate_partitions, _partition_start_epoch, _partition_duration_s
 from files import cors, apply_cors
 import files
+
 
 # ---------------------------------------------------------------------------
 # Minimal .npy header writer (little-endian int16, C order, 2D)
@@ -203,6 +207,52 @@ async def _connect_wifi():
     print('WiFi connected:', wlan.ifconfig()[0])
 
 
+
+async def accelerometer_task():
+
+    print('accelerometer-start')
+
+    from machine import SoftI2C, I2C, Pin
+    import bma423
+
+    # how many samples to wait before reading.
+    # BMA423 has 1024 bytes FIFO, enough for 150+ samples
+    accel_samples = 40
+    samplerate = 25
+
+    # pre-allocate buffers
+    # raw data (bytes). n_samples X 3 axes X 2 bytes
+    accel_buffer = bytearray(accel_samples*3*2)
+
+    # setup sensor
+    #i2c = SoftI2C(scl=11,sda=10)
+    i2c = I2C(scl=11,sda=10)
+    sensor = bma423.BMA423(i2c, addr=0x19)
+    sensor.fifo_enable()
+    sensor.set_accelerometer_freq(samplerate)
+    sensor.fifo_clear() # discard any samples lying around in FIFO
+    await asyncio.sleep(0.1)
+
+    print('accelerometer-init-done')
+    counter = 0
+    while True:
+        
+        # wait until we have enough samples
+        fifo_level = sensor.fifo_level()
+        if fifo_level >= len(accel_buffer):
+            
+            # read data
+            read_start = time.ticks_ms()
+            sensor.fifo_read(accel_buffer)
+            read_dur = time.ticks_diff(time.ticks_ms(), read_start)
+            
+            print('accelerometer-read', read_start/1000, fifo_level, read_dur)
+
+        
+        # limit how often we check
+        await asyncio.sleep(0.100)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -210,6 +260,9 @@ async def _connect_wifi():
 def main(host='0.0.0.0', port=80, debug=True):
     import asyncio
     from microhive import MicroHive
+
+
+    accel = asyncio.create_task(accelerometer_task())
 
     db = MicroHive('/mw_rw', {
         'sensor': {
