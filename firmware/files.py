@@ -119,6 +119,7 @@ def add_routes(app, base_dir='/files', default_chunk_size=DEFAULT_CHUNK_SIZE, on
     @app.route('/files', methods=["GET", "OPTIONS"])
     @cors()
     def list_files(request):
+        print('list-files-start', base_dir)
         try:
             files = []
             for entry in os.ilistdir(base_dir):
@@ -127,7 +128,8 @@ def add_routes(app, base_dir='/files', default_chunk_size=DEFAULT_CHUNK_SIZE, on
                     'name': name,
                     'type': 'dir' if ftype == 0x4000 else 'file'
                 })
-            return {'files': files, 'base_dir': base_dir}
+            print('list-files-return', files)
+            return {'files': files, 'base_dir': base_dir}, 200
         except OSError as e:
             return {'error': str(e)}, 500
 

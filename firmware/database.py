@@ -17,9 +17,11 @@ MicroPython note:
     Streaming uses a class-based generator compatible with both platforms.
 """
 
+import os
 import struct
 import asyncio
 import time
+import array
 
 from microdot import Microdot, Response, send_file
 
@@ -253,6 +255,56 @@ async def accelerometer_task():
         await asyncio.sleep(0.100)
 
 
+def run_xor(model_path):
+
+    import emlearn_trees
+
+    model = emlearn_trees.new(15, 1000, 10)
+
+    # Load a CSV file with the model
+    with open(model_path, 'r') as f:
+        emlearn_trees.load_model(model, f)
+
+    # run it
+    max_val = (2**15-1) # 1.0 as int16
+    examples = [
+        array.array('h', [0, 0]),
+        array.array('h', [max_val, max_val]),
+        array.array('h', [0, max_val]),
+        array.array('h', [max_val, 0]),
+    ]
+
+    out = array.array('f', range(model.outputs()))
+    for ex in examples:
+        model.predict(ex, out)    
+        result = out[1] > 0.5
+        print(list(ex), '->', list(out), ':', result)
+
+
+async def predict_task():
+
+    print('predict-start')
+
+    while True:
+
+        model_path = 'notebooks/xor_model.csv'
+
+        # check if model exists       
+        exists = False 
+        try:
+            os.stat(model_path)
+            exists = True
+        except OSError:
+            print('predict-model-not-found', model_path)
+
+        if exists:
+            print('predict-run', model_path)
+            run_xor(model_path)
+            print('\n')
+
+        # limit how often we check
+        await asyncio.sleep(10.000)
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -263,6 +315,8 @@ def main(host='0.0.0.0', port=80, debug=True):
 
 
     accel = asyncio.create_task(accelerometer_task())
+
+    predict = asyncio.create_task(predict_task())
 
     db = MicroHive('/mw_rw', {
         'sensor': {
@@ -289,7 +343,7 @@ def main(host='0.0.0.0', port=80, debug=True):
 
     @app.get('/')
     async def index(request):
-        return send_file('frontend/database_example.html')
+        return send_file('frontend/files_example.html')
 
     # TODO: use static/ prefix - to avoid colliding with api endpoints
     @app.get('/static/<path:path>')
