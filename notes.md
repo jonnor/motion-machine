@@ -4,8 +4,6 @@
 - compute metrics over overlapped windows
 - push the metrics into datastore over HTTP API
 
-- test uploading a RandomForest model made with emlearn, from JupyterLite
-
 - add rollup hooks, push raw accelerometer data, integrate window computations
 
 - Add link/button for "Open in Jupyter"

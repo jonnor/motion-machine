@@ -26,7 +26,6 @@ import array
 from microdot import Microdot, Response, send_file
 
 from microhive import TYPECODE, _enumerate_partitions, _partition_start_epoch, _partition_duration_s
-from files import cors, apply_cors
 import files
 
 
@@ -97,8 +96,7 @@ class _NpyStreamGenerator:
 def add_routes(app, db):
     """Register MicroHive routes on an existing Microdot app."""
 
-    @app.route('/info', methods=["GET", "OPTIONS"])
-    @cors()
+    @app.get('/info')
     async def info(request):
         print('info hit')
 
@@ -139,8 +137,7 @@ def add_routes(app, db):
             'hop_us':       cfg['hop'],
         }, 200
 
-    @app.route('/query', methods=["GET", "OPTIONS"])
-    @cors()
+    @app.get('/query')
     async def query(request):
         print('query hit')
 
@@ -173,7 +170,6 @@ def add_routes(app, db):
             'Content-Type': 'application/octet-stream',
             'Content-Disposition': 'attachment; filename="{}.npy"'.format(resource),
         })
-        apply_cors(r)
         return r
 
 
@@ -331,7 +327,13 @@ def main(host='0.0.0.0', port=80, debug=True):
         }
     })
 
+    from cors import CORS
+
     app = Microdot()
+
+    cors = CORS(app, allowed_origins='*',
+                allow_credentials=False)
+
     add_routes(app, db)
     
     # File handling
@@ -353,6 +355,7 @@ def main(host='0.0.0.0', port=80, debug=True):
     @app.get('/static/<path:path>')
     async def static(request, path):
         return send_file('frontend/' + path, max_age=MAX_AGE)
+
 
 
     # Actually start server
