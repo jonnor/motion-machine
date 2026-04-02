@@ -1,11 +1,43 @@
 
 # Timeseries database
 
-- add frontend for fetching timeseries using API
-- load some real data - compute metrics over overlapped windows and store. PAMAP2
-- add rollup hooks, push raw accelerometer data, add window computations there
+- compute metrics over overlapped windows
+- push the metrics into datastore over HTTP API
+
+- Fix emlearn package for JupyterLite
+- test uploading a RandomForest model made with emlearn, from JupyterLite
+
+- add rollup hooks, push raw accelerometer data, integrate window computations
 
 - Add link/button for "Open in Jupyter"
+
+
+# Running on T-Watch S3
+
+Standard image seems to work. Note: use the `.bin`.
+
+esptool.py --baud 460800 write_flash -z 0x0 Downloads/ESP32_GENERIC_S3-20251209-v1.27.0.bin
+
+How much space on filesystem?
+
+```
+import os
+stats = os.statvfs('/')
+block_size = stats[0]
+total_blocks = stats[2]
+free_blocks = stats[3]
+print(f"Total: {block_size * total_blocks / 1024:.1f} KB")
+print(f"Free:  {block_size * free_blocks / 1024:.1f} KB")
+```
+
+Got
+```
+14324.0 KB
+```
+
+BMA423 supports 25 Hz samplerate - not 20 Hz.
+
+axp2101 looks to work
 
 # Opening notebook with JupyterLite
 
