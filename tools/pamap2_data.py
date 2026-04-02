@@ -86,7 +86,8 @@ def main():
 
     out_npy = 'data/pamap2_20hz.npy'
     print('Save as npy')
-    numpy.save(out_npy, loaded, allow_pickle=False)
+    a = numpy.ascontiguousarray(loaded)
+    numpy.save(out_npy, a, allow_pickle=False)
 
     compressed = os.path.getsize(out_npy)
     print(compressed / 1e6, 'MB')    
