@@ -299,7 +299,11 @@ async def predict_task():
 
         if exists:
             print('predict-run', model_path)
-            run_xor(model_path)
+            try:
+                run_xor(model_path)
+            # prevent from existing the loop/retrying
+            except Exception as e:
+                print('predict-error', e)
             print('\n')
 
         # limit how often we check
