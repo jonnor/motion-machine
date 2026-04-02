@@ -75,6 +75,12 @@ def file_generator(path, chunk_size):
 
 
 def stream_request_body(request, path, chunk_size):
+    # TODO: actually support streaming
+    with open(path, 'wb') as f:
+        f.write(request.body)
+
+    return
+    
     with open(path, 'wb') as f:
         while True:
             chunk = request.stream.read(chunk_size)
@@ -171,6 +177,7 @@ def add_routes(app, base_dir='/files', default_chunk_size=DEFAULT_CHUNK_SIZE, on
         try:
             stream_request_body(request, full_path, chunk_size)
         except Exception as e:
+            print('write-file-error', e)
             return {'error': str(e)}, 500
 
         notify(full_path, 'write')
