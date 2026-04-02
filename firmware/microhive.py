@@ -391,6 +391,7 @@ class MicroHive:
 
                     rows_remaining -= rows_got
 
+                    print('check yield')
                     if buf_rows >= chunk_rows:
                         t_before = _ticks_ms()
                         yield buf
@@ -398,6 +399,7 @@ class MicroHive:
                         buf_rows = 0
 
         if buf_rows > 0:
+            print('finalize')
             t_before = _ticks_ms()
             yield array.array(TYPECODE, buf[:buf_rows * n_cols])
             t_yield_ms += _ticks_diff(_ticks_ms(), t_before)

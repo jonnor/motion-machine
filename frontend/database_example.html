@@ -150,7 +150,7 @@ async function fetchInfo(resource) {
 }
 
 async function fetchQuery(resource, startS, endS) {
-  const url = `/query?resource=${resource}&start=${startS}&end=${endS}&chunk_rows=600`;
+  const url = `/query?resource=${resource}&start=${startS}&end=${endS}&chunk_rows=200`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`/query ${r.status}: ${await r.text()}`);
   return r.arrayBuffer();
@@ -212,7 +212,7 @@ function Chart({ label, times, values, color }) {
 // ── Main App ─────────────────────────────────────────────────────────────────
 
 function App() {
-  const resource = 'sensor'; // could be a dropdown if multiple resources
+  const resource = 'metrics'; // could be a dropdown if multiple resources
 
   const [info,    setInfo]    = useState(null);
   const [error,   setError]   = useState(null);

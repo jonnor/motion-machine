@@ -3,6 +3,7 @@ micropython.wasm
 micropython.mjs
 npyfile.py
 secrets.py
+cors.py
 
 .ipynb_checkpoints/
 __pycache__/

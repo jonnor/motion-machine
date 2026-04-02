@@ -1,6 +1,8 @@
 
 # Timeseries database
 
+- fix appending data very inefficient
+
 - compute metrics over overlapped windows
 - push the metrics into datastore over HTTP API
 

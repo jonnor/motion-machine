@@ -22,12 +22,14 @@ import struct
 import asyncio
 import time
 import array
+import gc
 
 from microdot import Microdot, Response, send_file
 
 from microhive import TYPECODE, _enumerate_partitions, _partition_start_epoch, _partition_duration_s
 import files
 
+gc.collect()
 
 # ---------------------------------------------------------------------------
 # Minimal .npy header writer (little-endian int16, C order, 2D)
@@ -64,12 +66,14 @@ class _NpyStreamGenerator:
         self._n_cols     = n_cols
         self._hop_us     = hop_us
         self._iter       = None
+        self._bytes_sent = 0
 
     def __iter__(self):
         return self
 
     def _build_iter(self):
         total_rows = int((self._end_s - self._start_s) * 1_000_000) // self._hop_us
+        print('stream-gen-prep', total_rows)
 
         # First chunk: .npy header
         yield _npy_header(total_rows, self._n_cols)
@@ -78,6 +82,8 @@ class _NpyStreamGenerator:
         for chunk in self._db.get_timerange(
                 self._resource, self._start_s, self._end_s,
                 chunk_rows=self._chunk_rows):
+            self._bytes_sent += len(chunk)
+            print('stream-generator-chunk', len(chunk), self._bytes_sent)
             yield bytes(chunk)
 
     def __next__(self):
@@ -86,6 +92,7 @@ class _NpyStreamGenerator:
         try:
             return next(self._iter)
         except StopIteration:
+            print('stream-generator-stop')
             raise
 
 # ---------------------------------------------------------------------------
@@ -158,6 +165,9 @@ def add_routes(app, db):
         if resource not in db._resources:
             return 'Unknown resource: {}'.format(resource), 404
 
+        range_seconds = end_s - start_s
+        print('query', range_seconds)
+
         cfg    = db._resources[resource]
         n_cols = len(cfg['columns'])
         hop_us = cfg['hop']
@@ -186,7 +196,6 @@ async def _connect_wifi():
     except ImportError:
         return
 
-    import asyncio
     import secrets
 
     wlan = network.WLAN(network.STA_IF)
@@ -318,13 +327,25 @@ def main(host='0.0.0.0', port=80, debug=True):
 
     predict = asyncio.create_task(predict_task())
 
-    db = MicroHive('/mw_rw', {
-        'sensor': {
+    columns = [
+        'orient_x',
+        'orient_y',
+        'orient_z',
+        'sma',
+        'mean_x',
+        'mean_y',
+        'mean_z',
+    ]
+
+    database_dir = '/tsdb'
+
+    db = MicroHive(database_dir, {
+        'metrics': {
             'hop': 1_000_000,
-            'columns': ['sensor_a', 'sensor_b'],
+            'columns': columns,
             'dtype': 'int16',
             'granularity': 'hour',
-        }
+        },
     })
 
     from cors import CORS
@@ -349,6 +370,10 @@ def main(host='0.0.0.0', port=80, debug=True):
 
     @app.get('/')
     async def index(request):
+        return send_file('frontend/database_example.html')
+
+    @app.get('/filebrowser')
+    async def index(request):
         return send_file('frontend/files_example.html')
 
     # TODO: use static/ prefix - to avoid colliding with api endpoints
@@ -357,12 +382,14 @@ def main(host='0.0.0.0', port=80, debug=True):
         return send_file('frontend/' + path, max_age=MAX_AGE)
 
 
+    print('free:', gc.mem_free())
+    gc.collect()
+    print('free:', gc.mem_free())
 
     # Actually start server
     async def _startup():
         await _connect_wifi()
         print('MicroHive HTTP server on {}:{}'.format(host, port))
-        print('  GET /query?resource=<n>&start=<epoch>&end=<epoch>[&chunk_rows=<n>]')
         await app.start_server(host=host, port=port, debug=debug)
 
     asyncio.run(_startup())
