@@ -6,9 +6,28 @@
 
 - add some liveness indicator to watch, ex battery voltage on screen
 
+- handle button press. Enable POWERON IRQ in AXP2101, IQR handler on pin 21
+
 - add rollup hooks, push raw accelerometer data, integrate window computations
 
 - Add link/button for "Open in Jupyter"
+
+
+# 
+
+100 samples a 2 bytes
+
+Ideally would want 4 kB writes.
+This would however be a considerable time delay before data hits the disk.
+Acceptable if datastore returns in-memory data also transparently.
+Do explicit flushing if need to syncronize
+Can then use columnar storage always on-disk?
+
+int16 first_value
+uint8 n_values
+uint16 n_rows
+
+? need a marker to indicate invalidated chunks?
 
 
 # Running emlearn on JupyterLite

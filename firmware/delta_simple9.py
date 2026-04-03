@@ -37,15 +37,17 @@ _S9_MAX_WINDOW = 28
 # Returns the number of words written.
 # ---------------------------------------------------------------------------
 
-def _s9_encode(src, base, n, dst, win):
+def _s9_encode(src, base, n, dst, win, stride=1):
     """
-    Delta+zigzag-encode src[base:base+n] (int16) and Simple9-compress into
-    pre-allocated array.array('I') dst, using win as a scratch window buffer.
+    Delta+zigzag-encode n values from src starting at base with given stride,
+    Simple9-compressing into pre-allocated array.array('I') dst.
+    stride=1: contiguous column-major (default, from _buf).
+    stride=n_cols: row-major column access (direct from input data).
     Returns number of words written.
     The first value is used as the delta seed (first delta is always 0).
     """
     src_i   = base
-    src_end = base + n
+    src_end = base + n * stride
     n_words = 0
     prev    = src[base]
     exhausted = False
@@ -58,7 +60,7 @@ def _s9_encode(src, base, n, dst, win):
                 break
             d = src[src_i] - prev
             prev         = src[src_i]
-            src_i       += 1
+            src_i       += stride
             win[pending] = ((d << 1) ^ (d >> 16)) & 0x1FFFF
             pending     += 1
 
@@ -183,24 +185,50 @@ class Writer:
                                          n_cols, chunk_size))
             self._file.flush()
 
-    def write_row(self, row):
-        """Append one row (sequence of n_cols int16 values)."""
-        if len(row) != self._n_cols:
-            raise ValueError("Expected {} values, got {}".format(self._n_cols, len(row)))
-        r   = self._buf_rows
-        buf = self._buf
+    def write_rows(self, data, offset=0, n_rows=None):
+        """Append rows from array.array('h') in row-major C layout.
+        offset: starting item index (not row index) into data.
+        n_rows: number of rows to write; defaults to all rows from offset.
+        Encodes directly from row-major data in chunk_size batches via stride.
+        Any remainder is encoded immediately as a partial chunk — no row-by-row
+        Python loops, no deferred buffering across calls."""
+        nc  = self._n_cols
         cs  = self._chunk_size
-        for c in range(self._n_cols):
-            buf[c * cs + r] = row[c]
-        self._buf_rows = r + 1
-        if self._buf_rows >= cs:
+        if n_rows is None:
+            n_rows = (len(data) - offset) // nc
+
+        fw       = self._file.write
+        word_buf = self._word_buf
+        win      = self._win
+        pos      = offset
+
+        # Flush any previously buffered partial chunk first
+        if self._buf_rows > 0:
             self._flush()
 
-    def write_rows(self, data):
-        """Append multiple rows from array.array('h') in row-major C layout."""
-        n = len(data) // self._n_cols
-        for r in range(n):
-            self.write_row(data[r * self._n_cols:(r + 1) * self._n_cols])
+        # Encode all data in chunk_size batches directly from row-major input
+        while n_rows > 0:
+            take = min(n_rows, cs)
+            for c in range(nc):
+                seed    = data[pos + c]
+                n_words = _s9_encode(data, pos + c, take, word_buf, win, nc)
+                fw(struct.pack(_COL_HEADER_FMT, seed, n_words, take))
+                fw(bytes(word_buf[:n_words]))
+            pos    += take * nc
+            n_rows -= take
+
+        self._file.flush()
+
+    def write_row(self, row, offset=0):
+        """Append one row: values taken from row[offset:offset+n_cols]."""
+        buf_r = self._buf_rows
+        buf   = self._buf
+        cs    = self._chunk_size
+        for c in range(self._n_cols):
+            buf[c * cs + buf_r] = row[offset + c]
+        self._buf_rows = buf_r + 1
+        if self._buf_rows >= cs:
+            self._flush()
 
     def flush(self):
         """Force flush any buffered rows as a partial chunk."""

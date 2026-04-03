@@ -1,21 +1,9 @@
 """
-realworld_test.py - Real-world scenario test for MicroHive
+test_microhive.py - Test suite for microhive.py (delta_simple9 backend)
 
-Scenario:
-  - 12 hours of hourly-partitioned data
-  - 1-second resolution, 2 columns (sensor_a, sensor_b)
-  - Synthetic signal: 20-minute periodic pattern + noise + random walk
-  - int16 throughout
-
-Steps:
-  1. Stream-generate full 12h time series to source.npy (skipped if file exists)
-  2. Stream-load source.npy into MicroHive via append_data
-  3. Query middle 2 hours, save result to query_result.npy
-
-Run:
-    python3 realworld_test.py          # CPython (host dev)
-    micropython realworld_test.py      # MicroPython Unix port
-    mpremote run realworld_test.py     # ESP32
+Run with:
+    micropython test_microhive.py
+    python3 test_microhive.py
 """
 
 import array
@@ -24,12 +12,16 @@ import os
 import sys
 import time
 
-import npyfile
-from microhive import MicroHive, _makedirs, TYPECODE
+sys.path.insert(0, '/mnt/user-data/outputs')
+sys.path.insert(0, '/tmp')
+
+import microhive as mh
 
 # ---------------------------------------------------------------------------
-# Timing helpers
+# Helpers
 # ---------------------------------------------------------------------------
+
+BASE = '/tmp/mh_test'
 
 def _ms():
     try:
@@ -37,22 +29,11 @@ def _ms():
     except AttributeError:
         return int(time.time() * 1000)
 
-def _diff_ms(t0):
+def _diff(t0):
     try:
         return time.ticks_diff(time.ticks_ms(), t0)
     except AttributeError:
         return int(time.time() * 1000) - t0
-
-# ---------------------------------------------------------------------------
-# Filesystem helpers
-# ---------------------------------------------------------------------------
-
-def _file_exists(path):
-    try:
-        os.stat(path)
-        return True
-    except OSError:
-        return False
 
 def _rmdir_recursive(path):
     try:
@@ -75,298 +56,366 @@ def _rmdir_recursive(path):
     except OSError:
         pass
 
-# ---------------------------------------------------------------------------
-# Synthetic signal generator (no global state)
-# ---------------------------------------------------------------------------
+def setup():
+    _rmdir_recursive(BASE)
+    mh._makedirs(BASE)
 
-class _SignalGen:
-    """
-    Two-channel synthetic time series:
-      sensor_a: sine with 20-min period + noise + slow random walk
-      sensor_b: cosine (phase-shifted pi/3) + independent noise + random walk
-    All values stay within int16 range.
-    """
+def check(cond, msg):
+    if not cond:
+        raise AssertionError(msg)
 
-    _PI2 = 2.0 * 3.141592653589793
-
-    def __init__(self, period_s=1200, amplitude=8000, noise_scale=400,
-                 walk_scale=20, walk_limit=4000, seed=12345):
-        self._period_s    = period_s
-        self._amplitude   = amplitude
-        self._noise_scale = noise_scale
-        self._walk_scale  = walk_scale
-        self._walk_limit  = walk_limit
-        self._lcg         = seed
-        self._walk_a      = 0
-        self._walk_b      = 0
-
-    def _lcg_next(self):
-        self._lcg = (self._lcg * 1664525 + 1013904223) & 0xFFFFFFFF
-        return self._lcg
-
-    def _noise(self, scale):
-        """Approximate zero-mean noise via sum of two uniform LCG draws."""
-        r1 = self._lcg_next()
-        r2 = self._lcg_next()
-        v = ((r1 & 0xFFFF) + (r2 & 0xFFFF)) - 0xFFFF
-        return (v * scale) >> 16
-
-    def sample(self, t):
-        """Return (a, b) int16 sample at time offset t (seconds)."""
-        angle  = self._PI2 * t / self._period_s
-        base_a = int(self._amplitude * math.sin(angle))
-        base_b = int(self._amplitude * math.cos(angle + 1.047197551))  # pi/3 phase
-        lim    = self._walk_limit
-        self._walk_a = max(-lim, min(lim, self._walk_a + self._noise(self._walk_scale)))
-        self._walk_b = max(-lim, min(lim, self._walk_b + self._noise(self._walk_scale)))
-        a = max(-32768, min(32767, base_a + self._noise(self._noise_scale) + self._walk_a))
-        b = max(-32768, min(32767, base_b + self._noise(self._noise_scale) + self._walk_b))
-        return a, b
-
-# ---------------------------------------------------------------------------
-# Steps
-# ---------------------------------------------------------------------------
-
-def _step_generate(source_npy, total_rows, n_cols, signal):
-    """Step 1: Stream-generate synthetic time series to source.npy.
-    Skipped if the file already exists."""
-    if _file_exists(source_npy):
-        print("Step 1: Skipping generation, source.npy already exists")
-        print()
-        return
-
-    print("Step 1: Generate source.npy ({} rows, {} cols)".format(total_rows, n_cols))
-    t0 = _ms()
-
-    chunk_rows = 256
-    buf = array.array(TYPECODE, [0] * (chunk_rows * n_cols))
-
-    with npyfile.Writer(source_npy, shape=(total_rows, n_cols), typecode=TYPECODE) as w:
-        row = 0
-        while row < total_rows:
-            n = min(chunk_rows, total_rows - row)
-            for i in range(n):
-                a, b = signal.sample(row + i)
-                buf[i * n_cols]     = a
-                buf[i * n_cols + 1] = b
-            if n == chunk_rows:
-                w.write_values(buf, typecode=TYPECODE)
-            else:
-                w.write_values(array.array(TYPECODE, buf[:n * n_cols]), typecode=TYPECODE)
-            row += n
-
-    size_bytes = os.stat(source_npy)[6]
-    print("  Done in {} ms  |  file: {} bytes ({} KB)".format(
-        _diff_ms(t0), size_bytes, size_bytes // 1024))
-    print()
-
-
-def _step_load(source_npy, base_dir, resource, n_cols, append_chunk_rows, base_epoch):
-    """Step 2: Stream source.npy into MicroHive via append_data."""
-    print("Step 2: Load source.npy into MicroHive via append_data")
-    print("  Chunk: {} rows/call  |  Granularity: {}".format(
-        append_chunk_rows, resource['granularity']))
-    t0 = _ms()
-
-    db = MicroHive(base_dir, {"sensor": resource})
-    latencies = []
-
-    # Preallocate a full-chunk buffer; only create a smaller array for the final partial chunk
-    buf      = array.array(TYPECODE, [0] * (append_chunk_rows * n_cols))
-    buf_rows = 0
-    row_idx  = 0
-
-    with npyfile.Reader(source_npy) as reader:
-        for row in reader.read_data_chunks(n_cols):
-            buf[buf_rows * n_cols]     = row[0]
-            buf[buf_rows * n_cols + 1] = row[1]
-            buf_rows += 1
-            row_idx  += 1
-
-            if buf_rows == append_chunk_rows:
-                ts = base_epoch + (row_idx - buf_rows)
-                t_a = _ms()
-                db.append_data("sensor", buf, timestamp_s=ts)
-                elapsed = _diff_ms(t_a)
-                latencies.append(elapsed)
-                data_ts_t = time.gmtime(ts)
-                print("  append {:3d}: {:02d}:{:02d}:{:02d}  rows {:5d}-{:5d}  ({} ms)".format(
-                    len(latencies),
-                    data_ts_t[3], data_ts_t[4], data_ts_t[5],
-                    row_idx - append_chunk_rows, row_idx - 1,
-                    elapsed))
-                buf_rows = 0
-
-    if buf_rows > 0:
-        ts = base_epoch + (row_idx - buf_rows)
-        t_a = _ms()
-        db.append_data("sensor", array.array(TYPECODE, buf[:buf_rows * n_cols]), timestamp_s=ts)
-        elapsed = _diff_ms(t_a)
-        latencies.append(elapsed)
-        data_ts_t = time.gmtime(ts)
-        print("  append {:3d}: {:02d}:{:02d}:{:02d}  rows {:5d}-{:5d}  ({} ms)".format(
-            len(latencies),
-            data_ts_t[3], data_ts_t[4], data_ts_t[5],
-            row_idx - buf_rows, row_idx - 1,
-            elapsed))
-
-    max_ms  = max(latencies)
-    avg_ms  = sum(latencies) // len(latencies)
-    over100 = sum(1 for l in latencies if l > 100)
-
-    print("  Total appends: {}  |  total rows: {}".format(len(latencies), row_idx))
-    print("  Total time: {} ms".format(_diff_ms(t0)))
-    print("  Avg / max append latency: {} ms / {} ms  [{}]".format(
-        avg_ms, max_ms, "OK" if max_ms <= 100 else "FAIL >100ms"))
-    print("  Appends over 100ms: {} / {}".format(over100, len(latencies)))
-    print("  Partitions created: {}".format(db.get_info("sensor")['n_partitions']))
-    print()
-    return db
-
-
-def _query_iter(db, resource_name, start_s, end_s, chunk_rows, n_cols, hop_s):
-    """Shared iteration logic: yields (chunk, elapsed_ms, data_ts) for each chunk."""
-    t_chunk = _ms()
-    total_rows = 0
-    for chunk in db.get_timerange(resource_name, start_s, end_s, chunk_rows=chunk_rows):
-        elapsed      = _diff_ms(t_chunk)
-        chunk_rows_n = len(chunk) // n_cols
-        data_ts      = start_s + int(total_rows * hop_s)
-        yield chunk, elapsed, data_ts, total_rows, chunk_rows_n
-        total_rows  += chunk_rows_n
-        t_chunk      = _ms()
-
-
-def _step_query_readonly(db, n_cols, base_epoch, resource,
-                         query_start_offset_h, query_end_offset_h):
-    """Step 3a: Query only — no file I/O. Isolates pure read performance."""
-    start_s       = base_epoch + query_start_offset_h * 3600
-    end_s         = base_epoch + query_end_offset_h * 3600
-    expected_rows = (query_end_offset_h - query_start_offset_h) * 3600
-    chunk_rows    = 600
-    hop_s         = resource['hop'] / 1_000_000.0
-
-    print("Step 3a: Query hours {}..{} (read-only, no file write)".format(
-        query_start_offset_h, query_end_offset_h))
-    print("  Expected rows: {}  |  chunk_rows: {}".format(expected_rows, chunk_rows))
-    t0 = _ms()
-
-    total_rows   = 0
-    max_chunk_ms = 0
-    for chunk, elapsed, data_ts, row_offset, chunk_rows_n in             _query_iter(db, "sensor", start_s, end_s, chunk_rows, n_cols, hop_s):
-        data_ts_t = time.gmtime(data_ts)
-        print("  chunk {:4d}: {:02d}:{:02d}:{:02d}  rows {:5d}-{:5d}  ({} ms)".format(
-            row_offset // chunk_rows,
-            data_ts_t[3], data_ts_t[4], data_ts_t[5],
-            row_offset, row_offset + chunk_rows_n - 1,
-            elapsed))
-        max_chunk_ms = max(max_chunk_ms, elapsed)
-        total_rows  += chunk_rows_n
-
-    print("  Rows returned: {}  [{}]".format(
-        total_rows, "OK" if total_rows == expected_rows else "FAIL"))
-    print("  Max chunk latency: {} ms  [{}]".format(
-        max_chunk_ms, "OK" if max_chunk_ms <= 500 else "FAIL >500ms"))
-    print("  Total query time: {} ms".format(_diff_ms(t0)))
-    print()
-
-
-def _step_query_write(db, result_npy, n_cols, base_epoch, resource,
-                      query_start_offset_h, query_end_offset_h):
-    """Step 3b: Query and write result to query_result.npy."""
-    start_s       = base_epoch + query_start_offset_h * 3600
-    end_s         = base_epoch + query_end_offset_h * 3600
-    expected_rows = (query_end_offset_h - query_start_offset_h) * 3600
-    chunk_rows    = 600
-    hop_s         = resource['hop'] / 1_000_000.0
-
-    # Row count from time range and hop — data is dense and regular
-    count = int((end_s - start_s) * 1_000_000) // resource['hop']
-
-    print("Step 3b: Query hours {}..{} -> query_result.npy".format(
-        query_start_offset_h, query_end_offset_h))
-    print("  Expected rows: {}  |  chunk_rows: {}".format(expected_rows, chunk_rows))
-    t0 = _ms()
-
-    total_rows   = 0
-    max_chunk_ms = 0
-    with npyfile.Writer(result_npy, shape=(count, n_cols), typecode=TYPECODE) as w:
-        for chunk, elapsed, data_ts, row_offset, chunk_rows_n in                 _query_iter(db, "sensor", start_s, end_s, chunk_rows, n_cols, hop_s):
-            data_ts_t = time.gmtime(data_ts)
-            print("  chunk {:4d}: {:02d}:{:02d}:{:02d}  rows {:5d}-{:5d}  ({} ms)".format(
-                row_offset // chunk_rows,
-                data_ts_t[3], data_ts_t[4], data_ts_t[5],
-                row_offset, row_offset + chunk_rows_n - 1,
-                elapsed))
-            max_chunk_ms = max(max_chunk_ms, elapsed)
-            total_rows  += chunk_rows_n
-            w.write_values(chunk, typecode=TYPECODE)
-
-    size_bytes = os.stat(result_npy)[6]
-    print("  Rows returned: {}  [{}]".format(
-        total_rows, "OK" if total_rows == expected_rows else "FAIL"))
-    print("  Max chunk latency: {} ms  [{}]".format(
-        max_chunk_ms, "OK" if max_chunk_ms <= 500 else "FAIL >500ms"))
-    print("  Total query time: {} ms".format(_diff_ms(t0)))
-    print("  Output file: {} bytes ({} KB)".format(size_bytes, size_bytes // 1024))
-    print()
-
-# ---------------------------------------------------------------------------
-# Test
-# ---------------------------------------------------------------------------
-
-def test_12h_hourly_periodic_signal():
-    base_dir   = "data/mw_rw" if sys.platform != "esp32" else "/mw_rw"
-    source_npy = base_dir + "/source.npy"
-    result_npy = base_dir + "/query_result.npy"
-
-    duration_h        = 12
-    n_cols            = 2
-    hop_us            = 1_000_000   # 1 second
-    append_chunk_rows = 1000        # rows per append call
-    total_rows        = duration_h * 3600
-
+def _base_epoch():
+    """Fixed epoch: 2025-01-01 00:00:00 UTC, as Unix epoch seconds."""
     try:
-        base_epoch = int(time.mktime((2025, 6, 1, 0, 0, 0, 0, 0)))
+        return int(time.mktime((2025, 1, 1, 0, 0, 0, 0, 0))) + mh._EPOCH_OFFSET
     except TypeError:
-        base_epoch = int(time.mktime((2025, 6, 1, 0, 0, 0, 0, 0, -1)))
+        return int(time.mktime((2025, 1, 1, 0, 0, 0, 0, 0, -1))) + mh._EPOCH_OFFSET
 
-    resource = {
-        "hop": hop_us,
-        "columns": ["sensor_a", "sensor_b"],
-        "dtype": "int16",
-        "granularity": "hour",
-    }
+def _collect(db, resource, start_s, end_s, chunk_rows=64):
+    """Collect all rows from get_timerange into a single array."""
+    out = array.array('h')
+    for chunk in db.get_timerange(resource, start_s, end_s, chunk_rows=chunk_rows):
+        out.extend(chunk)
+    return out
 
-    print("=== test_12h_hourly_periodic_signal ===")
-    print("Platform: {}  |  Base dir: {}".format(sys.platform, base_dir))
-    print("{} hours  |  {} rows  |  1s hop  |  {} cols".format(
-        duration_h, total_rows, n_cols))
-    print()
+def _make_db(granularity='hour', hop_us=1_000_000, n_cols=2, debug=False):
+    return mh.MicroHive(BASE, {
+        'sensor': {
+            'hop': hop_us,
+            'columns': ['a', 'b'][:n_cols],
+            'dtype': 'int16',
+            'granularity': granularity,
+        }
+    }, debug=debug)
 
-    _makedirs(base_dir)
-
-    _step_generate(source_npy, total_rows, n_cols, _SignalGen())
-    sensor_dir = base_dir + "/sensor"
-    if _file_exists(sensor_dir):
-        print("Step 2: Skipping load, data already exists in {}".format(sensor_dir))
-        print()
-        db = MicroHive(base_dir, {"sensor": resource})
-    else:
-        db = _step_load(source_npy, base_dir, resource, n_cols,
-                        append_chunk_rows, base_epoch)
-    _step_query_readonly(db, n_cols, base_epoch, resource,
-                         query_start_offset_h=5, query_end_offset_h=7)
-    _step_query_write(db, result_npy, n_cols, base_epoch, resource,
-                      query_start_offset_h=5, query_end_offset_h=7)
-
-    print("Files written:")
-    print("  {}".format(source_npy))
-    print("  {}".format(result_npy))
+def _rows(n, n_cols=2, offset=0):
+    """Generate n rows of recognisable test data as array.array('h')."""
+    data = array.array('h')
+    for i in range(n):
+        for c in range(n_cols):
+            data.append((offset + i + c * 100) % 30000)
+    return data
 
 # ---------------------------------------------------------------------------
-# Main
+# Tests
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    test_12h_hourly_periodic_signal()
+def test_single_append_and_query():
+    """Basic: write 10 rows, read them back."""
+    setup()
+    t0 = _base_epoch()
+    db = _make_db()
+    data = _rows(10)
+    db.append_data('sensor', data, timestamp_s=t0)
+    out = _collect(db, 'sensor', t0, t0 + 10)
+    check(len(out) == 20, "expected 20 items, got {}".format(len(out)))
+    for i in range(20):
+        check(out[i] == data[i], "item {}: {} != {}".format(i, out[i], data[i]))
+
+def test_query_full_partition():
+    """Write exactly one hour of 1Hz data, query it all back."""
+    setup()
+    t0   = _base_epoch()
+    db   = _make_db(granularity='hour', hop_us=1_000_000)
+    n    = 3600
+    data = _rows(n)
+    db.append_data('sensor', data, timestamp_s=t0)
+    # Verify chunk-by-chunk to avoid accumulating 14400 bytes on embedded targets
+    row_offset = 0
+    for chunk in db.get_timerange('sensor', t0, t0 + n, chunk_rows=256):
+        chunk_n = len(chunk) // 2
+        for r in range(chunk_n):
+            i = row_offset + r
+            check(chunk[r*2]   == data[i*2],   "row {} col 0: {} != {}".format(i, chunk[r*2],   data[i*2]))
+            check(chunk[r*2+1] == data[i*2+1], "row {} col 1: {} != {}".format(i, chunk[r*2+1], data[i*2+1]))
+        row_offset += chunk_n
+    check(row_offset == n, "expected {} rows, got {}".format(n, row_offset))
+
+def test_query_sub_range():
+    """Write 1h, query only the middle portion."""
+    setup()
+    t0   = _base_epoch()
+    db   = _make_db(granularity='hour', hop_us=1_000_000)
+    n    = 3600
+    data = _rows(n)
+    db.append_data('sensor', data, timestamp_s=t0)
+
+    q_start = t0 + 1000
+    q_end   = t0 + 2000
+    expected_rows = 1000
+    row_offset = 0
+    for chunk in db.get_timerange('sensor', q_start, q_end, chunk_rows=256):
+        chunk_n = len(chunk) // 2
+        for r in range(chunk_n):
+            for c in range(2):
+                got      = chunk[r * 2 + c]
+                expected = data[(1000 + row_offset + r) * 2 + c]
+                check(got == expected,
+                      "row {} col {}: got {} expected {}".format(row_offset+r, c, got, expected))
+        row_offset += chunk_n
+    check(row_offset == expected_rows,
+          "expected {} rows, got {}".format(expected_rows, row_offset))
+
+def test_multi_chunk_append():
+    """Multiple append calls to same partition accumulate correctly."""
+    setup()
+    t0   = _base_epoch()
+    db   = _make_db(granularity='hour', hop_us=1_000_000)
+    hop  = 100  # rows per append
+    n    = 500
+
+    all_data = array.array('h')
+    for i in range(0, n, hop):
+        chunk = _rows(hop, offset=i)
+        db.append_data('sensor', chunk, timestamp_s=t0 + i)
+        all_data.extend(chunk)
+
+    out = _collect(db, 'sensor', t0, t0 + n)
+    check(len(out) // 2 == n, "expected {} rows, got {}".format(n, len(out) // 2))
+    for i in range(len(all_data)):
+        check(out[i] == all_data[i], "item {}: {} != {}".format(i, out[i], all_data[i]))
+
+def test_cross_partition_split_hour():
+    """Data spanning two hourly partitions is split correctly."""
+    setup()
+    t0  = _base_epoch()          # start of hour 0
+    t1  = t0 + 3600              # start of hour 1
+    db  = _make_db(granularity='hour', hop_us=1_000_000)
+    n   = 200                    # 100 rows in hour 0, 100 in hour 1
+    # start 100s before boundary
+    ts  = t1 - 100
+    data = _rows(n)
+    db.append_data('sensor', data, timestamp_s=ts)
+
+    check(db.get_info('sensor')['n_partitions'] == 2, "expected 2 partitions")
+
+    out = _collect(db, 'sensor', ts, ts + n, chunk_rows=64)
+    check(len(out) // 2 == n,
+          "expected {} rows, got {}".format(n, len(out) // 2))
+    for i in range(len(data)):
+        check(out[i] == data[i], "item {}: {} != {}".format(i, out[i], data[i]))
+
+def test_cross_partition_split_minute():
+    """Minute granularity: data split across 3 minute partitions."""
+    setup()
+    t0  = _base_epoch()
+    db  = _make_db(granularity='minute', hop_us=1_000_000)
+    # start 30s before end of minute 0 → spans minutes 0, 1, 2
+    ts   = t0 + 30
+    n    = 150
+    data = _rows(n)
+    db.append_data('sensor', data, timestamp_s=ts)
+
+    check(db.get_info('sensor')['n_partitions'] == 3, "expected 3 partitions")
+
+    out = _collect(db, 'sensor', ts, ts + n)
+    check(len(out) // 2 == n,
+          "expected {} rows, got {}".format(n, len(out) // 2))
+    for i in range(len(data)):
+        check(out[i] == data[i], "item {}: {} != {}".format(i, out[i], data[i]))
+
+def test_query_across_partitions():
+    """Query spanning multiple partitions returns contiguous data."""
+    setup()
+    t0  = _base_epoch()
+    db  = _make_db(granularity='hour', hop_us=1_000_000)
+
+    for h in range(4):
+        db.append_data('sensor', _rows(3600, offset=h * 1000), timestamp_s=t0 + h * 3600)
+
+    # Verify chunk-by-chunk to avoid accumulating 4*14400 bytes
+    row_offset = 0
+    for chunk in db.get_timerange('sensor', t0, t0 + 4 * 3600, chunk_rows=256):
+        chunk_n = len(chunk) // 2
+        for r in range(chunk_n):
+            i      = row_offset + r
+            h      = i // 3600
+            ri     = i % 3600
+            exp_a  = (h * 1000 + ri) % 30000
+            exp_b  = (h * 1000 + ri + 100) % 30000
+            check(chunk[r*2]   == exp_a, "row {} col 0: {} != {}".format(i, chunk[r*2],   exp_a))
+            check(chunk[r*2+1] == exp_b, "row {} col 1: {} != {}".format(i, chunk[r*2+1], exp_b))
+        row_offset += chunk_n
+    check(row_offset == 4 * 3600,
+          "expected {} rows, got {}".format(4 * 3600, row_offset))
+
+def test_query_missing_partition():
+    """Querying a time range with no data returns empty."""
+    setup()
+    t0  = _base_epoch()
+    db  = _make_db()
+    out = _collect(db, 'sensor', t0, t0 + 3600)
+    check(len(out) == 0, "expected empty, got {} items".format(len(out)))
+
+def test_query_partial_overlap_start():
+    """Query starts before data: only overlapping rows returned."""
+    setup()
+    t0   = _base_epoch()
+    db   = _make_db(granularity='hour', hop_us=1_000_000)
+    ts   = t0 + 500   # data starts at row 500
+    n    = 200
+    data = _rows(n)
+    db.append_data('sensor', data, timestamp_s=ts)
+
+    # Query from t0 (before data) to ts+100 (mid-data)
+    out = _collect(db, 'sensor', t0, ts + 100)
+    check(len(out) // 2 == 100,
+          "expected 100 rows, got {}".format(len(out) // 2))
+    for r in range(100):
+        for c in range(2):
+            check(out[r*2+c] == data[r*2+c],
+                  "row {} col {}: {} != {}".format(r, c, out[r*2+c], data[r*2+c]))
+
+def test_int16_extremes():
+    """int16 min/max values survive round-trip."""
+    setup()
+    t0   = _base_epoch()
+    db   = _make_db(n_cols=2)
+    data = array.array('h', [32767, -32768, -1, 1, 0, 0, 32767, -32768])
+    db.append_data('sensor', data, timestamp_s=t0)
+    out = _collect(db, 'sensor', t0, t0 + 4)
+    check(list(out) == list(data),
+          "extremes mismatch: {} != {}".format(list(out), list(data)))
+
+def test_out_of_order_rejected():
+    """Writing to an earlier partition after a later one raises ValueError."""
+    setup()
+    t0  = _base_epoch()
+    db  = _make_db()
+    db.append_data('sensor', _rows(10), timestamp_s=t0 + 7200)  # hour 2
+    try:
+        db.append_data('sensor', _rows(10), timestamp_s=t0)      # hour 0
+        check(False, "should have raised ValueError")
+    except ValueError:
+        pass
+
+def test_n_partitions_correct():
+    """get_info returns the correct partition count."""
+    setup()
+    t0 = _base_epoch()
+    db = _make_db(granularity='hour')
+    for h in range(5):
+        db.append_data('sensor', _rows(10), timestamp_s=t0 + h * 3600)
+    info = db.get_info('sensor')
+    check(info['n_partitions'] == 5,
+          "expected 5 partitions, got {}".format(info['n_partitions']))
+
+def test_reopen_and_append():
+    """
+    Append to a partition, close the MicroHive, reopen, append more.
+    delta_simple9 Writer appends to existing .des9 files transparently.
+    """
+    setup()
+    t0   = _base_epoch()
+    data1 = _rows(100)
+    data2 = _rows(100, offset=100)
+
+    db1 = _make_db()
+    db1.append_data('sensor', data1, timestamp_s=t0)
+
+    db2 = _make_db()   # fresh MicroHive instance, same directory
+    db2.append_data('sensor', data2, timestamp_s=t0 + 100)
+
+    out = _collect(db2, 'sensor', t0, t0 + 200)
+    all_data = array.array('h')
+    all_data.extend(data1)
+    all_data.extend(data2)
+    check(len(out) // 2 == 200,
+          "expected 200 rows, got {}".format(len(out) // 2))
+    for i in range(len(all_data)):
+        check(out[i] == all_data[i],
+              "item {}: {} != {}".format(i, out[i], all_data[i]))
+
+def test_12h_hourly_scenario():
+    """
+    Integration: 12 hours of 1Hz 2-col data, hourly partitions.
+    Write in 1000-row chunks, query middle 2 hours, verify correctness.
+    """
+    setup()
+    t0        = _base_epoch()
+    hop_us    = 1_000_000
+    n_cols    = 2
+    total_s   = 12 * 3600
+    chunk_n   = 1000
+
+    db = mh.MicroHive(BASE, {
+        'sensor': {
+            'hop': hop_us,
+            'columns': ['a', 'b'],
+            'dtype': 'int16',
+            'granularity': 'hour',
+        }
+    }, debug=False)
+
+    # Use simple linear pattern so values are predictable
+    all_data = array.array('h')
+    for start in range(0, total_s, chunk_n):
+        n    = min(chunk_n, total_s - start)
+        rows = array.array('h')
+        for i in range(n):
+            rows.append((start + i) % 30000)       # col a
+            rows.append((start + i + 1000) % 30000) # col b
+        db.append_data('sensor', rows, timestamp_s=t0 + start)
+        all_data.extend(rows)
+
+    check(db.get_info('sensor')['n_partitions'] == 12, "expected 12 partitions")
+
+    # Query hours 5-7 (rows 18000..25199)
+    q_start      = t0 + 5 * 3600
+    q_end        = t0 + 7 * 3600
+    expected_n   = 2 * 3600
+    expected_off = 5 * 3600
+
+    t_q = _ms()
+    row_offset = 0
+    for chunk in db.get_timerange('sensor', q_start, q_end, chunk_rows=256):
+        chunk_n = len(chunk) // 2
+        for r in range(chunk_n):
+            i     = row_offset + r
+            exp_a = (expected_off + i) % 30000
+            exp_b = (expected_off + i + 1000) % 30000
+            check(chunk[r*2]   == exp_a, "row {} col 0: {} != {}".format(i, chunk[r*2],   exp_a))
+            check(chunk[r*2+1] == exp_b, "row {} col 1: {} != {}".format(i, chunk[r*2+1], exp_b))
+        row_offset += chunk_n
+    elapsed = _diff(t_q)
+    check(row_offset == expected_n,
+          "expected {} rows, got {}".format(expected_n, row_offset))
+    print("  12h scenario: query {} rows in {}ms".format(expected_n, elapsed))
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+TESTS = [
+    test_single_append_and_query,
+    test_query_full_partition,
+    test_query_sub_range,
+    test_multi_chunk_append,
+    test_cross_partition_split_hour,
+    test_cross_partition_split_minute,
+    test_query_across_partitions,
+    test_query_missing_partition,
+    test_query_partial_overlap_start,
+    test_int16_extremes,
+    test_out_of_order_rejected,
+    test_n_partitions_correct,
+    test_reopen_and_append,
+    test_12h_hourly_scenario,
+]
+
+passed = failed = 0
+for t in TESTS:
+    try:
+        t()
+        print("  OK:", t.__name__)
+        passed += 1
+    except Exception as e:
+        print("FAIL:", t.__name__, "-", e)
+        
+        
+        failed += 1
+
+_rmdir_recursive(BASE)
+print("\n{}/{} passed".format(passed, passed + failed))
+if failed:
+    sys.exit(1)
