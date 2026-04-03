@@ -314,6 +314,32 @@ async def predict_task():
         # limit how often we check
         await asyncio.sleep(10.000)
 
+
+async def status_task():
+
+    print('status-start')
+    from machine import Pin
+    from axp2101 import AXP2101
+
+    pmu = AXP2101()
+    pmu.twatch_s3_poweron()
+
+    # Power on the display backlight.
+    backlight = Pin(45, Pin.OUT)
+    backlight.on()
+
+    print('status-init-done')
+
+    while True:
+
+        batt = pmu.get_battery_voltage()
+        print('status-run', batt)
+
+        # limit how often we check
+        await asyncio.sleep(10.000)
+
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -326,6 +352,8 @@ def main(host='0.0.0.0', port=80, debug=True):
     accel = asyncio.create_task(accelerometer_task())
 
     predict = asyncio.create_task(predict_task())
+
+    status = asyncio.create_task(status_task())
 
     columns = [
         'orient_x',

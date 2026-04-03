@@ -2,9 +2,9 @@
 # Timeseries database
 
 - fix appending data very inefficient
-
-- compute metrics over overlapped windows
 - push the metrics into datastore over HTTP API
+
+- add some liveness indicator to watch, ex battery voltage on screen
 
 - add rollup hooks, push raw accelerometer data, integrate window computations
 
