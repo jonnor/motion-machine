@@ -107,9 +107,8 @@ def _s9_decode_into(raw, n_words, n_values, dst, base, stride, seed):
     Decode n_words Simple9 words from raw bytes, undoing zigzag+delta inline.
     Writes results into dst starting at base with given stride.
     Stops after n_values values.
-    Unpacks all words at once for performance.
     """
-    words   = struct.unpack('<{}I'.format(n_words), raw[:n_words * 4])
+    words = struct.unpack('<{}I'.format(n_words), raw[:n_words * 4])
     emitted = 0
     idx     = base
     prev    = seed
@@ -209,11 +208,13 @@ class Writer:
         # Encode all data in chunk_size batches directly from row-major input
         while n_rows > 0:
             take = min(n_rows, cs)
+            chunk_bytes = b''
             for c in range(nc):
                 seed    = data[pos + c]
                 n_words = _s9_encode(data, pos + c, take, word_buf, win, nc)
-                fw(struct.pack(_COL_HEADER_FMT, seed, n_words, take))
-                fw(bytes(word_buf[:n_words]))
+                chunk_bytes += struct.pack(_COL_HEADER_FMT, seed, n_words, take)
+                chunk_bytes += bytes(word_buf[:n_words])
+            fw(chunk_bytes)
             pos    += take * nc
             n_rows -= take
 
@@ -253,13 +254,14 @@ class Writer:
         cs       = self._chunk_size
         n_rows   = self._buf_rows
 
+        chunk_bytes = b''
         for c in range(self._n_cols):
             base    = c * cs
             seed    = buf[base]
             n_words = _s9_encode(buf, base, n_rows, word_buf, win)
-            fw(struct.pack(_COL_HEADER_FMT, seed, n_words, n_rows))
-            fw(bytes(word_buf[:n_words]))
-
+            chunk_bytes += struct.pack(_COL_HEADER_FMT, seed, n_words, n_rows)
+            chunk_bytes += bytes(word_buf[:n_words])
+        fw(chunk_bytes)
         self._buf_rows = 0
 
 
@@ -288,6 +290,9 @@ class Reader:
         self._n_cols     = nc
         self._chunk_size = cs
         self._data_start = _FILE_HEADER_SIZE
+        # Pre-allocated read buffers — reused every call, zero allocation per read
+        self._hdr_buf = bytearray(_COL_HEADER_SIZE)
+        self._raw_buf = bytearray(cs * 4)
 
     @property
     def n_cols(self):
@@ -300,29 +305,29 @@ class Reader:
 
     def read_chunk_into(self, out):
         """
-        Decode one chunk directly into pre-allocated array.array('h') out.
-        out must have capacity >= chunk_size * n_cols, laid out row-major.
-        Column c of row r is written to out[r*n_cols + c].
+        Decode one chunk into pre-allocated array.array('h') out (row-major).
         Returns number of rows written, or 0 at EOF.
+        Uses MicroPython readinto(buf, n) and struct.unpack_from — no allocation.
         """
-        hdr_bytes = self._file.read(_COL_HEADER_SIZE)
-        if not hdr_bytes or len(hdr_bytes) < _COL_HEADER_SIZE:
+        nc  = self._n_cols
+        hdr = self._hdr_buf
+        raw = self._raw_buf
+        rd  = self._file.readinto
+
+        if not rd(hdr, _COL_HEADER_SIZE):
             return 0
+        seed, nw, n_rows = struct.unpack(_COL_HEADER_FMT, hdr)
+        rd(raw, nw * 4)
+        _s9_decode_into(raw, nw, n_rows, out, 0, nc, seed)
 
-        seed0, n_words0, n_rows = struct.unpack(_COL_HEADER_FMT, hdr_bytes)
-        nc = self._n_cols
-
-        for c in range(nc):
-            if c == 0:
-                seed, nw = seed0, n_words0
-            else:
-                hb = self._file.read(_COL_HEADER_SIZE)
-                seed, nw, _ = struct.unpack(_COL_HEADER_FMT, hb)
-
-            raw = self._file.read(nw * 4)
+        for c in range(1, nc):
+            rd(hdr, _COL_HEADER_SIZE)
+            seed, nw, _ = struct.unpack(_COL_HEADER_FMT, hdr)
+            rd(raw, nw * 4)
             _s9_decode_into(raw, nw, n_rows, out, c, nc, seed)
 
         return n_rows
+
 
     def close(self):
         self._file.close()

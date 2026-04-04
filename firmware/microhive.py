@@ -192,17 +192,15 @@ def _makedirs(path):
             raise OSError("makedirs failed at {}: {}".format(current, e))
 
 # ---------------------------------------------------------------------------
-# Segment reader — generator, Reader held open across yields (GC-safe: the
-# generator frame keeps the Reader referenced). Writes directly into buf at
-# buf_rows offset, yields updated buf_rows when buf is full, final yield
-# gives remaining buf_rows so caller can flush.
+# Segment reader — yields decoded ds9 chunks directly from decode_buf.
+# Zero copy: caller receives (decode_buf, item_offset, n_rows) and reads
+# the slice in place. Reader held open across yields (GC-safe).
 # ---------------------------------------------------------------------------
 def _stream_segment(path, n_cols, part_row_start, part_row_end, first_row,
-                    decode_buf, buf, chunk_rows, buf_rows):
+                    decode_buf):
     """
-    Stream rows [part_row_start, part_row_end) from segment directly into buf.
-    Yields buf_rows each time buf is full (== chunk_rows); caller yields buf
-    to consumer then calls send(0) to reset. Final yield gives remaining count.
+    Yield (decode_buf, item_start, n_rows) for each decoded ds9 chunk
+    overlapping [part_row_start, part_row_end). No intermediate copy.
     """
     file_row = first_row
     try:
@@ -223,18 +221,9 @@ def _stream_segment(path, n_cols, part_row_start, part_row_end, first_row,
                 break
             local_start = max(0, part_row_start - chunk_abs_start)
             local_end   = min(n,  part_row_end   - chunk_abs_start)
-            for row_i in range(local_start, local_end):
-                src = row_i   * n_cols
-                dst = buf_rows * n_cols
-                for i in range(n_cols):
-                    buf[dst + i] = decode_buf[src + i]
-                buf_rows += 1
-                if buf_rows == chunk_rows:
-                    yield buf_rows
-                    buf_rows = 0
+            yield decode_buf, local_start * n_cols, local_end - local_start
     finally:
         r.close()
-    yield buf_rows  # remaining rows
 # ---------------------------------------------------------------------------
 class MicroHive:
     """
@@ -289,13 +278,9 @@ class MicroHive:
         n_partitions = n_rows_skipped = n_rows_read = 0
         t0 = _ticks_ms()
 
-        # Output buffer: exactly chunk_rows deep. _read_segment fills it up to
-        # chunk_rows rows at a time; we yield when full, then refill.
-        buf      = array.array(TYPECODE, [0] * (chunk_rows * n_cols))
-        buf_rows = 0
-
-        # Decode buffer: reused across all segment reads (one ds9 chunk at a time).
+        # Decode buffer: one ds9 chunk at a time, yielded directly (zero copy).
         decode_buf = array.array(TYPECODE, [0] * (DS9_CHUNK_SIZE * n_cols))
+        buf_rows   = 0
 
         hop_s_float = hop_us / 1_000_000.0
 
@@ -325,32 +310,20 @@ class MicroHive:
 
                 # Stream rows from segment directly into buf.
                 # _iter_segment holds the file open across yields — safe because
-                # the generator frame keeps Reader referenced (MicroPython GC tested).
-                # Stream segment directly into buf via generator.
-                # Reader stays open across yields — safe: generator frame
-                # holds the Reader reference, preventing GC collection.
+                # Zero-copy: yield decoded ds9 chunks directly to caller.
                 t_r = _ticks_ms()
-                for new_buf_rows in _stream_segment(path, n_cols,
-                                                    part_row_start, part_row_end,
-                                                    first_row, decode_buf,
-                                                    buf, chunk_rows, buf_rows):
-                    t_read_ms += _ticks_diff(_ticks_ms(), t_r)
-                    if new_buf_rows == chunk_rows:
-                        n_rows_read += new_buf_rows - buf_rows
-                        buf_rows     = 0
-                        t_before     = _ticks_ms()
-                        yield buf
-                        t_yield_ms  += _ticks_diff(_ticks_ms(), t_before)
-                    else:
-                        n_rows_read += new_buf_rows - buf_rows
-                        buf_rows     = new_buf_rows
+                for chunk_data, item_start, n_rows in _stream_segment(
+                        path, n_cols, part_row_start, part_row_end,
+                        first_row, decode_buf):
+                    t_read_ms   += _ticks_diff(_ticks_ms(), t_r)
+                    n_rows_read += n_rows
+                    t_before     = _ticks_ms()
+                    # Yield a slice of decode_buf directly — zero allocation.
+                    # Caller must consume before next iteration overwrites it.
+                    yield memoryview(chunk_data)[item_start:item_start + n_rows * n_cols]
+                    t_yield_ms  += _ticks_diff(_ticks_ms(), t_before)
                     t_r = _ticks_ms()
 
-        if buf_rows > 0:
-            t_before = _ticks_ms()
-            yield array.array(TYPECODE, buf[:buf_rows * n_cols])
-            t_yield_ms += _ticks_diff(_ticks_ms(), t_before)
-            buf_rows = 0
 
         if self.debug:
             t_total_ms = _ticks_diff(_ticks_ms(), t0)
