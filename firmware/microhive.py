@@ -23,7 +23,7 @@ import delta_simple9
 # ---------------------------------------------------------------------------
 TYPECODE       = 'h'
 ITEMSIZE       = 2
-DS9_CHUNK_SIZE = 8*128
+DS9_CHUNK_SIZE = 128
 
 # ---------------------------------------------------------------------------
 # Monotonic clock
@@ -447,7 +447,16 @@ class MicroHive:
             _makedirs(pdir)
             t_mkdir_ms += _ticks_diff(_ticks_ms(), t0m)
 
-            path = _data_file(pdir, resource, first_row)
+            # Use existing file if one already exists, else create with first_row.
+            # Try the expected path first to avoid listdir on every call.
+            expected_path = _data_file(pdir, resource, first_row)
+            try:
+                os.stat(expected_path)
+                path = expected_path
+            except OSError:
+                existing = _find_data_files(pdir, resource)
+                path = existing[0][1] if existing else expected_path
+
             t0o = _ticks_ms()
             w = delta_simple9.Writer(path, n_cols, DS9_CHUNK_SIZE)
             n_writer_opens += 1

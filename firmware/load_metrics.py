@@ -92,7 +92,7 @@ def main():
 
     base_epoch = 1775052566 # 01.04.2026
     load_accel_to_db(db, path, sensor_name='metrics', n_cols=len(columns), base_epoch=base_epoch,
-        chunk_rows=10000)
+        chunk_rows=1000)
 
 
 if __name__ == '__main__':

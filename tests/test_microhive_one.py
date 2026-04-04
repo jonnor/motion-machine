@@ -58,6 +58,9 @@ def _rmdir_recursive(path):
 def setup():
     _rmdir_recursive(BASE)
     mh._makedirs(BASE)
+    try:
+        import gc; gc.collect()
+    except: pass
 
 def check(cond, msg):
     if not cond:
@@ -66,7 +69,7 @@ def check(cond, msg):
 def _base_epoch():
     """Fixed epoch: 2025-01-01 00:00:00 as Unix epoch seconds.
     The public API of microhive takes Unix epoch seconds."""
-    return mh._parts_to_epoch(2025, 1, 1, 0, 0, 0) - mh._EPOCH_OFFSET
+    return mh._parts_to_epoch(2025, 1, 1, 0, 0, 0)
 
 def _collect(db, resource, start_s, end_s, chunk_rows=64):
     """Collect all rows from get_timerange into a single array."""
