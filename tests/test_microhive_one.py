@@ -12,8 +12,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, '/mnt/user-data/outputs')
-sys.path.insert(0, '/tmp')
+sys.path.insert(0, '.')
 
 import microhive as mh
 
@@ -65,11 +64,10 @@ def check(cond, msg):
         raise AssertionError(msg)
 
 def _base_epoch():
-    """Fixed epoch: 2025-01-01 00:00:00 UTC, as Unix epoch seconds."""
-    try:
-        return int(time.mktime((2025, 1, 1, 0, 0, 0, 0, 0))) + mh._EPOCH_OFFSET
-    except TypeError:
-        return int(time.mktime((2025, 1, 1, 0, 0, 0, 0, 0, -1))) + mh._EPOCH_OFFSET
+    """Fixed epoch: 2025-01-01 00:00:00 UTC.
+    Uses mh._parts_to_epoch for pure UTC arithmetic — no time.mktime,
+    so the result is timezone-independent."""
+    return mh._parts_to_epoch(2025, 1, 1, 0, 0, 0)
 
 def _collect(db, resource, start_s, end_s, chunk_rows=64):
     """Collect all rows from get_timerange into a single array."""
