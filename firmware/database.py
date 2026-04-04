@@ -106,42 +106,23 @@ def add_routes(app, db):
     @app.get('/info')
     async def info(request):
         print('info hit')
-
         resource = request.args.get('resource')
-
         if not resource:
             return 'Missing resource', 400
         if resource not in db._resources:
             return 'Unknown resource: {}'.format(resource), 404
-
-        cfg  = db._resources[resource]
-        gran = cfg['granularity']
-        dur  = _partition_duration_s(gran)
-
-        first_key = None
-        last_key  = None
-        n_partitions = 0
-        for key, _ in _enumerate_partitions(db._base, resource, gran):
-            if first_key is None:
-                first_key = key
-            last_key = key
-            n_partitions += 1
-
-        if first_key is None:
+        info = db.get_info(resource)
+        if info['n_partitions'] == 0:
             return {'resource': resource, 'has_data': False}, 200
-
-        start_s = _partition_start_epoch(first_key)
-        end_s   = _partition_start_epoch(last_key) + dur
-
         return {
             'resource':     resource,
             'has_data':     True,
-            'start':        start_s,
-            'end':          end_s,
-            'n_partitions': n_partitions,
-            'granularity':  gran,
-            'columns':      cfg['columns'],
-            'hop_us':       cfg['hop'],
+            'start':        info['start_s'],
+            'end':          info['end_s'],
+            'n_partitions': info['n_partitions'],
+            'granularity':  info['granularity'],
+            'columns':      info['columns'],
+            'hop_us':       info['hop_us'],
         }, 200
 
     @app.get('/query')

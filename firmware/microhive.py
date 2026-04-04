@@ -23,7 +23,7 @@ import delta_simple9
 # ---------------------------------------------------------------------------
 TYPECODE       = 'h'
 ITEMSIZE       = 2
-DS9_CHUNK_SIZE = 128
+DS9_CHUNK_SIZE = 8*128
 
 # ---------------------------------------------------------------------------
 # Monotonic clock
@@ -38,35 +38,35 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Time / epoch helpers
 # ---------------------------------------------------------------------------
+# Detect epoch: MicroPython on embedded targets uses 2000-01-01 as epoch,
+# but MicroPython on Unix/desktop uses 1970-01-01 (same as CPython).
+# Detect by checking what gmtime(0) returns — no assumptions about platform name.
 try:
-    import sys as _sys
-    _EPOCH_OFFSET = 946684800 if _sys.implementation.name == 'micropython' else 0
-except AttributeError:
+    _EPOCH_OFFSET = 946684800 if time.gmtime(0)[0] == 2000 else 0
+except Exception:
     _EPOCH_OFFSET = 0
 
 def _epoch_to_parts(epoch_s):
-    t = time.gmtime(epoch_s - _EPOCH_OFFSET)
+    """Convert platform epoch seconds to UTC calendar parts via gmtime.
+    gmtime expects platform-native epoch seconds (no offset needed)."""
+    t = time.gmtime(int(epoch_s))
     return t[0], t[1], t[2], t[3], t[4], t[5]
 
-# Days in each month (non-leap, leap)
+# Days per month (index 0 unused)
 _MDAYS = (0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
-def _is_leap(y):
-    return y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
-
 def _parts_to_epoch(year, month, day, hour=0, minute=0, second=0):
-    """Convert UTC calendar parts to Unix epoch seconds.
-    Pure arithmetic — no time.mktime, avoids local timezone contamination."""
-    # Days from 1970-01-01 to start of year
-    y = year - 1
-    days = y*365 + y//4 - y//100 + y//400
-    # Subtract days up to 1970-01-01
-    days -= (1969*365 + 1969//4 - 1969//100 + 1969//400)
-    # Add days for months in this year
+    """Convert UTC calendar parts to platform epoch seconds.
+    Pure arithmetic — never calls time.mktime, so timezone-independent."""
+    # Leap year check
+    leap = (year % 4 == 0) and (year % 100 != 0 or year % 400 == 0)
+    # Days since Unix epoch (1970-01-01)
+    y = year - 1970
+    days = y * 365 + (y + 1) // 4 - (y + 69) // 100 + (y + 369) // 400
     for m in range(1, month):
-        days += _MDAYS[m] + (1 if m == 2 and _is_leap(year) else 0)
+        days += _MDAYS[m] + (1 if m == 2 and leap else 0)
     days += day - 1
-    return days * 86400 + hour * 3600 + minute * 60 + second + _EPOCH_OFFSET
+    return int(days * 86400 + hour * 3600 + minute * 60 + second) - _EPOCH_OFFSET
 
 def _partition_epoch(year, month, day, hour=0, minute=0):
     return _parts_to_epoch(year, month, day, hour, minute, 0)
@@ -192,21 +192,22 @@ def _makedirs(path):
             raise OSError("makedirs failed at {}: {}".format(current, e))
 
 # ---------------------------------------------------------------------------
-# Segment reader — reads one segment into out_buf starting at out_rows offset.
-# File is held open only during this call; yields allow the caller to flush
-# out_buf between ds9 chunks without re-opening the file.
-# Safe on MicroPython: Reader is referenced by the generator frame.
+# Segment reader — reads one segment fully into out_buf, file closed before
+# any yield. Returns (rows_written, resume_abs_row): resume_abs_row > 0 means
+# out_buf filled up mid-segment; caller should call again with
+# part_row_start=resume_abs_row and start_buf_rows=0 after yielding out_buf.
 # ---------------------------------------------------------------------------
-def _iter_segment(path, n_cols, part_row_start, part_row_end, first_row,
-                  decode_buf, out_buf, chunk_rows, start_buf_rows):
+def _read_segment_into(path, n_cols, part_row_start, part_row_end, first_row,
+                       decode_buf, out_buf, start_buf_rows, cap):
     """
-    Generator: reads rows [part_row_start, part_row_end) from segment,
-    appending into out_buf starting at start_buf_rows.
-    Yields total buf_rows each time out_buf is full (== chunk_rows).
-    Final yield is remaining buf_rows (caller flushes if > 0).
+    Read rows [part_row_start, part_row_end) from segment into out_buf
+    starting at start_buf_rows, writing at most cap rows.
+    File is fully closed before returning.
+    Returns (rows_written, resume_abs_row): resume_abs_row==0 means fully done.
     """
     buf_rows = start_buf_rows
     file_row = first_row
+    resume   = 0
 
     r = delta_simple9.Reader(path)
     try:
@@ -228,18 +229,18 @@ def _iter_segment(path, n_cols, part_row_start, part_row_end, first_row,
             local_end   = min(n,  part_row_end   - chunk_abs_start)
 
             for row_i in range(local_start, local_end):
+                if buf_rows - start_buf_rows >= cap:
+                    resume = chunk_abs_start + row_i
+                    return buf_rows - start_buf_rows, resume
                 src = row_i   * n_cols
                 dst = buf_rows * n_cols
                 for i in range(n_cols):
                     out_buf[dst + i] = decode_buf[src + i]
                 buf_rows += 1
-                if buf_rows == chunk_rows:
-                    yield buf_rows
-                    buf_rows = 0
     finally:
         r.close()
 
-    yield buf_rows  # final yield: remaining rows (caller keeps as new buf_rows)
+    return buf_rows - start_buf_rows, 0
 
 # ---------------------------------------------------------------------------
 class MicroHive:
@@ -285,6 +286,9 @@ class MicroHive:
         n_cols = len(cfg['columns'])
         gran   = cfg['granularity']
         hop_us = cfg['hop']
+        # API takes Unix epoch seconds; convert to platform epoch.
+        start_s = int(start_s) - _EPOCH_OFFSET
+        end_s   = int(end_s)   - _EPOCH_OFFSET
 
         t_enum_ms = t_open_ms = t_read_ms = t_skip_ms = t_copy_ms = t_yield_ms = 0
         n_partitions = n_rows_skipped = n_rows_read = 0
@@ -327,24 +331,29 @@ class MicroHive:
                 # Stream rows from segment directly into buf.
                 # _iter_segment holds the file open across yields — safe because
                 # the generator frame keeps Reader referenced (MicroPython GC tested).
-                t_r = _ticks_ms()
-                for new_buf_rows in _iter_segment(path, n_cols,
-                                                  part_row_start, part_row_end,
-                                                  first_row, decode_buf,
-                                                  buf, chunk_rows, buf_rows):
-                    t_read_ms += _ticks_diff(_ticks_ms(), t_r)
-                    if new_buf_rows == chunk_rows:
-                        # buf is full — yield to caller, then keep reading
-                        n_rows_read += new_buf_rows - buf_rows
-                        buf_rows     = 0
-                        t_before     = _ticks_ms()
-                        yield buf
-                        t_yield_ms  += _ticks_diff(_ticks_ms(), t_before)
-                    else:
-                        # Final yield: new_buf_rows is total rows now in buf
-                        n_rows_read += new_buf_rows - buf_rows
-                        buf_rows     = new_buf_rows
+                # Read segment in cap-sized slices, closing the file between
+                # each yield so no Reader is open across a yield point.
+                seg_start = part_row_start
+                while True:
+                    cap = chunk_rows - buf_rows
                     t_r = _ticks_ms()
+                    written, resume = _read_segment_into(path, n_cols,
+                                                         seg_start, part_row_end,
+                                                         first_row, decode_buf,
+                                                         buf, buf_rows, cap)
+                    t_read_ms   += _ticks_diff(_ticks_ms(), t_r)
+                    buf_rows    += written
+                    n_rows_read += written
+
+                    if buf_rows >= chunk_rows:
+                        t_before    = _ticks_ms()
+                        yield buf
+                        t_yield_ms += _ticks_diff(_ticks_ms(), t_before)
+                        buf_rows    = 0
+
+                    if resume == 0:
+                        break
+                    seg_start = resume
 
         if buf_rows > 0:
             t_before = _ticks_ms()
@@ -383,7 +392,12 @@ class MicroHive:
             raise ValueError(
                 "data length {} not a multiple of column count {}".format(len(data), n_cols))
 
-        start_s     = timestamp_s if timestamp_s is not None else time.time()
+        # API takes Unix epoch seconds; convert to platform epoch for internal use.
+        # time.time() already returns platform epoch so no conversion needed there.
+        if timestamp_s is not None:
+            start_s = int(timestamp_s) - _EPOCH_OFFSET
+        else:
+            start_s = int(time.time())
         dur_s       = _partition_duration_s(gran)
         hop_s_float = hop_us / 1_000_000.0
         n_rows      = len(data) // n_cols
@@ -395,7 +409,7 @@ class MicroHive:
         while data_offset < n_rows:
             # Derive current timestamp from original start + rows already written.
             # Computed from data_offset each iteration — no accumulated drift.
-            now_s = start_s + data_offset * hop_s_float
+            now_s = int(start_s + data_offset * hop_s_float)
 
             t0k = _ticks_ms()
             current_key  = _epoch_to_partition_key(now_s, gran)
@@ -456,12 +470,27 @@ class MicroHive:
     def get_info(self, resource):
         cfg  = self._res(resource)
         gran = cfg['granularity']
-        n_partitions = sum(1 for _ in _enumerate_partitions(
-            self._base, resource, gran))
+        dur  = _partition_duration_s(gran)
+
+        first_key = None
+        last_key  = None
+        n_partitions = 0
+        for key, pdir in _enumerate_partitions(self._base, resource, gran):
+            if first_key is None:
+                first_key = key
+            last_key = key
+            n_partitions += 1
+
+        start_s = _partition_start_epoch(first_key) if first_key else None
+        end_s   = _partition_start_epoch(last_key) + dur if last_key else None
+
+        # Convert platform epoch back to Unix epoch for the public API.
         return {
             'resource':     resource,
             'granularity':  gran,
             'hop_us':       cfg['hop'],
             'columns':      cfg['columns'],
             'n_partitions': n_partitions,
+            'start_s':      (start_s + _EPOCH_OFFSET) if start_s is not None else None,
+            'end_s':        (end_s   + _EPOCH_OFFSET) if end_s   is not None else None,
         }

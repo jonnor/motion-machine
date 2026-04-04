@@ -64,10 +64,9 @@ def check(cond, msg):
         raise AssertionError(msg)
 
 def _base_epoch():
-    """Fixed epoch: 2025-01-01 00:00:00 UTC.
-    Uses mh._parts_to_epoch for pure UTC arithmetic — no time.mktime,
-    so the result is timezone-independent."""
-    return mh._parts_to_epoch(2025, 1, 1, 0, 0, 0)
+    """Fixed epoch: 2025-01-01 00:00:00 as Unix epoch seconds.
+    The public API of microhive takes Unix epoch seconds."""
+    return mh._parts_to_epoch(2025, 1, 1, 0, 0, 0) - mh._EPOCH_OFFSET
 
 def _collect(db, resource, start_s, end_s, chunk_rows=64):
     """Collect all rows from get_timerange into a single array."""

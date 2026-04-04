@@ -23,7 +23,7 @@ def load_accel_to_db(db, source_npy, base_epoch,
         nonlocal n_appends
         ts = base_epoch + (row_idx - n_rows)
         t0 = _ms()
-        db.append_data(sensor_name, buf, timestamp_s=ts)
+        db.append_data(sensor_name, buf, timestamp_s=int(ts))
         ts_t = time.gmtime(ts)
         print("  append {}: {:02d}:{:02d}:{:02d}  rows {}-{}  ({} ms)".format(
             n_appends, ts_t[3], ts_t[4], ts_t[5],
@@ -77,7 +77,7 @@ def main():
         'mean_z',
     ]
 
-    database_dir = '/tsdb'
+    database_dir = 'tsdb'
     _rmdir_recursive(database_dir)
     
     db = MicroHive(database_dir, {
@@ -92,7 +92,7 @@ def main():
 
     base_epoch = 1775052566 # 01.04.2026
     load_accel_to_db(db, path, sensor_name='metrics', n_cols=len(columns), base_epoch=base_epoch,
-        chunk_rows=100)
+        chunk_rows=10000)
 
 
 if __name__ == '__main__':
