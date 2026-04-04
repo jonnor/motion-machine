@@ -133,5 +133,16 @@ bench_query(db, t0, n, chunk_rows=256)
 bench_query(db, t0, n, chunk_rows=512)
 
 print()
+print("--- query raw codec (after 1h write, chunk=100) ---")
+_rmdir(BASE); mh._makedirs(BASE)
+t0 = 1735689600
+with mh.MicroHive(BASE, {'s': dict(RESOURCE, codec='raw')}, debug=False) as db:
+    chunk = make_data(100)
+    for start in range(0, 3600, 100):
+        db.append_data('s', chunk, timestamp_s=t0 + start)
+
+db2 = mh.MicroHive(BASE, {'s': dict(RESOURCE, codec='raw')}, debug=False)
+bench_query(db2, t0, 3600, chunk_rows=256)
+
 _rmdir(BASE)
 print("done")

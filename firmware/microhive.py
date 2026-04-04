@@ -19,11 +19,23 @@ import array
 import time
 
 import delta_simple9
+try:
+    import raw16
+except ImportError:
+    raw16 = None
 
 # ---------------------------------------------------------------------------
 TYPECODE       = 'h'
 ITEMSIZE       = 2
 DS9_CHUNK_SIZE = 256
+
+def _codec(cfg):
+    """Return the codec module for a resource config ('compressed' or 'raw')."""
+    if cfg.get('codec', 'compressed') == 'raw':
+        if raw16 is None:
+            raise ImportError("raw16 module not available")
+        return raw16
+    return delta_simple9
 
 # ---------------------------------------------------------------------------
 # Monotonic clock
@@ -196,17 +208,17 @@ def _makedirs(path):
 # Zero copy: caller receives (decode_buf, item_offset, n_rows) and reads
 # the slice in place. Reader held open across yields (GC-safe).
 # ---------------------------------------------------------------------------
-def _stream_segment(path, n_cols, part_row_start, part_row_end, first_row,
+def _stream_segment(codec, path, n_cols, part_row_start, part_row_end, first_row,
                     decode_buf):
     """
-    Yield (decode_buf, item_start, n_rows) for each decoded ds9 chunk
+    Yield (decode_buf, item_start, n_rows) for each decoded chunk
     overlapping [part_row_start, part_row_end). No intermediate copy.
     """
     file_row = first_row
     try:
         import gc; gc.collect()
     except: pass
-    r = delta_simple9.Reader(path)
+    r = codec.Reader(path)
     try:
         while True:
             n = r.read_chunk_into(decode_buf)
@@ -279,6 +291,7 @@ class MicroHive:
         t0 = _ticks_ms()
 
         # Decode buffer: one ds9 chunk at a time, yielded directly (zero copy).
+        codec      = _codec(cfg)
         decode_buf = array.array(TYPECODE, [0] * (DS9_CHUNK_SIZE * n_cols))
         buf_rows   = 0
 
@@ -312,7 +325,7 @@ class MicroHive:
                 # _iter_segment holds the file open across yields — safe because
                 # Zero-copy: yield decoded ds9 chunks directly to caller.
                 t_r = _ticks_ms()
-                for chunk_data, item_start, n_rows in _stream_segment(
+                for chunk_data, item_start, n_rows in _stream_segment(codec,
                         path, n_cols, part_row_start, part_row_end,
                         first_row, decode_buf):
                     t_read_ms   += _ticks_diff(_ticks_ms(), t_r)
@@ -421,7 +434,7 @@ class MicroHive:
                 except OSError:
                     existing = _find_data_files(pdir, resource)
                     path = existing[0][1] if existing else expected_path
-                w = delta_simple9.Writer(path, n_cols, DS9_CHUNK_SIZE)
+                w = _codec(cfg).Writer(path, n_cols, DS9_CHUNK_SIZE)
                 self._writers[pdir] = w
                 n_writer_opens += 1
             t_writer_ms += _ticks_diff(_ticks_ms(), t0o)
