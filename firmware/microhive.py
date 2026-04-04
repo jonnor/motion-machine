@@ -48,11 +48,25 @@ def _epoch_to_parts(epoch_s):
     t = time.gmtime(epoch_s - _EPOCH_OFFSET)
     return t[0], t[1], t[2], t[3], t[4], t[5]
 
+# Days in each month (non-leap, leap)
+_MDAYS = (0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+def _is_leap(y):
+    return y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+
 def _parts_to_epoch(year, month, day, hour=0, minute=0, second=0):
-    try:
-        return int(time.mktime((year, month, day, hour, minute, second, 0, 0))) + _EPOCH_OFFSET
-    except TypeError:
-        return int(time.mktime((year, month, day, hour, minute, second, 0, 0, -1))) + _EPOCH_OFFSET
+    """Convert UTC calendar parts to Unix epoch seconds.
+    Pure arithmetic — no time.mktime, avoids local timezone contamination."""
+    # Days from 1970-01-01 to start of year
+    y = year - 1
+    days = y*365 + y//4 - y//100 + y//400
+    # Subtract days up to 1970-01-01
+    days -= (1969*365 + 1969//4 - 1969//100 + 1969//400)
+    # Add days for months in this year
+    for m in range(1, month):
+        days += _MDAYS[m] + (1 if m == 2 and _is_leap(year) else 0)
+    days += day - 1
+    return days * 86400 + hour * 3600 + minute * 60 + second + _EPOCH_OFFSET
 
 def _partition_epoch(year, month, day, hour=0, minute=0):
     return _parts_to_epoch(year, month, day, hour, minute, 0)
@@ -178,21 +192,20 @@ def _makedirs(path):
             raise OSError("makedirs failed at {}: {}".format(current, e))
 
 # ---------------------------------------------------------------------------
-# Segment reader — generator that holds file open across yields.
-# Yields buf_rows count each time out_buf[0:chunk_rows*n_cols] is full.
-# Caller receives updated buf_rows after each yield and resets to 0 after
-# consuming. File is closed in the finally block when generator is exhausted
-# or closed. Safe on MicroPython: generator frame keeps Reader alive.
+# Segment reader — reads one segment into out_buf starting at out_rows offset.
+# File is held open only during this call; yields allow the caller to flush
+# out_buf between ds9 chunks without re-opening the file.
+# Safe on MicroPython: Reader is referenced by the generator frame.
 # ---------------------------------------------------------------------------
 def _iter_segment(path, n_cols, part_row_start, part_row_end, first_row,
-                  decode_buf, out_buf, chunk_rows):
+                  decode_buf, out_buf, chunk_rows, start_buf_rows):
     """
     Generator: reads rows [part_row_start, part_row_end) from segment,
-    writing into out_buf row by row. Yields buf_rows each time out_buf
-    is full (buf_rows == chunk_rows). After the loop, yields remaining
-    buf_rows (may be 0) as the final value so caller can flush.
+    appending into out_buf starting at start_buf_rows.
+    Yields total buf_rows each time out_buf is full (== chunk_rows).
+    Final yield is remaining buf_rows (caller flushes if > 0).
     """
-    buf_rows = 0
+    buf_rows = start_buf_rows
     file_row = first_row
 
     r = delta_simple9.Reader(path)
@@ -226,7 +239,7 @@ def _iter_segment(path, n_cols, part_row_start, part_row_end, first_row,
     finally:
         r.close()
 
-    yield buf_rows  # final yield: remaining rows (0 if evenly divided)
+    yield buf_rows  # final yield: remaining rows (caller keeps as new buf_rows)
 
 # ---------------------------------------------------------------------------
 class MicroHive:
@@ -250,11 +263,6 @@ class MicroHive:
         self._resources = resources
         self._last_partition = {}
         self.debug      = debug
-        # Cache of open Writers: (resource, path) -> delta_simple9.Writer
-        # Kept open across append_data calls to avoid per-call open/close overhead.
-        self._writers   = {}
-        # Last partition dir created per resource — skip _makedirs when unchanged
-        self._last_pdir = {}
 
     def _res(self, name):
         if name not in self._resources:
@@ -320,21 +328,22 @@ class MicroHive:
                 # _iter_segment holds the file open across yields — safe because
                 # the generator frame keeps Reader referenced (MicroPython GC tested).
                 t_r = _ticks_ms()
-                for seg_buf_rows in _iter_segment(path, n_cols,
+                for new_buf_rows in _iter_segment(path, n_cols,
                                                   part_row_start, part_row_end,
                                                   first_row, decode_buf,
-                                                  buf, chunk_rows):
+                                                  buf, chunk_rows, buf_rows):
                     t_read_ms += _ticks_diff(_ticks_ms(), t_r)
-                    if seg_buf_rows == chunk_rows:
+                    if new_buf_rows == chunk_rows:
                         # buf is full — yield to caller, then keep reading
-                        n_rows_read += seg_buf_rows
+                        n_rows_read += new_buf_rows - buf_rows
+                        buf_rows     = 0
                         t_before     = _ticks_ms()
                         yield buf
                         t_yield_ms  += _ticks_diff(_ticks_ms(), t_before)
                     else:
-                        # Final yield from segment: merge with any prior buf_rows
-                        buf_rows    += seg_buf_rows
-                        n_rows_read += seg_buf_rows
+                        # Final yield: new_buf_rows is total rows now in buf
+                        n_rows_read += new_buf_rows - buf_rows
+                        buf_rows     = new_buf_rows
                     t_r = _ticks_ms()
 
         if buf_rows > 0:
@@ -374,7 +383,7 @@ class MicroHive:
             raise ValueError(
                 "data length {} not a multiple of column count {}".format(len(data), n_cols))
 
-        now_s       = timestamp_s if timestamp_s is not None else time.time()
+        start_s     = timestamp_s if timestamp_s is not None else time.time()
         dur_s       = _partition_duration_s(gran)
         hop_s_float = hop_us / 1_000_000.0
         n_rows      = len(data) // n_cols
@@ -383,11 +392,11 @@ class MicroHive:
         n_writer_opens = 0
         data_offset = 0
 
-        print('apend', len(data))
         while data_offset < n_rows:
-            print('iter', data_offset, n_rows)
-            # Compute partition for the current timestamp — done once per
-            # partition boundary, not once per row or per chunk.
+            # Derive current timestamp from original start + rows already written.
+            # Computed from data_offset each iteration — no accumulated drift.
+            now_s = start_s + data_offset * hop_s_float
+
             t0k = _ticks_ms()
             current_key  = _epoch_to_partition_key(now_s, gran)
             part_start_s = _partition_start_epoch(current_key)
@@ -401,54 +410,45 @@ class MicroHive:
                         last_key, current_key))
             self._last_partition[resource] = current_key
 
-            # All rows from data_offset that fit before the partition boundary
+            # Rows fitting in this partition: row i is at now_s + i*hop_s_float,
+            # which belongs here iff that timestamp < part_end_s.
+            # int() truncation is correct: if gap is exactly N hops, row N
+            # starts at part_end_s and belongs to the next partition.
             rows_remaining  = n_rows - data_offset
             rows_in_current = min(rows_remaining,
-                                  max(0, int((part_end_s - now_s) / hop_s_float)))
+                                  int((part_end_s - now_s) / hop_s_float))
+
+            # Guard: should not be <= 0 since now_s < part_end_s (timezone fix
+            # ensures _parts_to_epoch is UTC-correct), but raise if it happens.
+            if rows_in_current <= 0:
+                raise ValueError(
+                    "append_data: rows_in_current={} at offset={}/{} now_s={} part_end_s={}".format(
+                        rows_in_current, data_offset, n_rows, now_s, part_end_s))
 
             first_row = int((now_s - part_start_s) / hop_s_float)
-
             pdir = _partition_dir(self._base, resource, gran,
                                   current_key[0], current_key[1], current_key[2],
                                   current_key[3], current_key[4])
             t0m = _ticks_ms()
-            if pdir != self._last_pdir.get(resource):
-                _makedirs(pdir)
-                self._last_pdir[resource] = pdir
+            _makedirs(pdir)
             t_mkdir_ms += _ticks_diff(_ticks_ms(), t0m)
 
+            path = _data_file(pdir, resource, first_row)
             t0o = _ticks_ms()
-            w = self._writers.get(pdir)
-            if w is None:
-                # First write to this partition in this session — create file
-                # with first_row encoding the timeline offset.
-                path = _data_file(pdir, resource, first_row)
-                w = delta_simple9.Writer(path, n_cols, DS9_CHUNK_SIZE)
-                self._writers[pdir] = w
-                n_writer_opens += 1
+            w = delta_simple9.Writer(path, n_cols, DS9_CHUNK_SIZE)
+            n_writer_opens += 1
             t_writer_ms += _ticks_diff(_ticks_ms(), t0o)
 
-            # Write the entire slice for this partition in one call
             t0w = _ticks_ms()
             w.write_rows(data, data_offset * n_cols, rows_in_current)
+            w.close()
             t_write_ms += _ticks_diff(_ticks_ms(), t0w)
 
             data_offset += rows_in_current
-            now_s        = part_end_s
 
         if self.debug:
             print("[append_data] writer_opens={} key={}ms mkdir={}ms writer_open={}ms write={}ms".format(
                 n_writer_opens, t_key_ms, t_mkdir_ms, t_writer_ms, t_write_ms))
-
-    # ------------------------------------------------------------------
-    # Writer cache management
-    # ------------------------------------------------------------------
-    def flush_writers(self):
-        """Flush and close all cached Writers. Call before reading or on shutdown."""
-        for w in self._writers.values():
-            w.close()
-        self._writers  = {}
-        self._last_pdir = {}
 
     # ------------------------------------------------------------------
     # Info
