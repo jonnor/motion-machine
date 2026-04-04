@@ -13,21 +13,13 @@
 - Add link/button for "Open in Jupyter"
 
 
-# 
+# Compression
 
-100 samples a 2 bytes
+delta-zigzag-simple9b did not compress PAMAP2 features much. Net loss.
+delta-zigzag-simple9b. 406 kB in 18 seconds. Only 22 kB/s.
 
-Ideally would want 4 kB writes.
-This would however be a considerable time delay before data hits the disk.
-Acceptable if datastore returns in-memory data also transparently.
-Do explicit flushing if need to syncronize
-Can then use columnar storage always on-disk?
-
-int16 first_value
-uint8 n_values
-uint16 n_rows
-
-? need a marker to indicate invalidated chunks?
+raw16. 396 kB in 3 seconds. 132 kB/s.
+Tested maximum for reads otherwise is around 210 kB/s.
 
 
 # Running emlearn on JupyterLite

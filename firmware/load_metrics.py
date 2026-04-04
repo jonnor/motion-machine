@@ -86,6 +86,7 @@ def main():
             'columns': columns,
             'dtype': 'int16',
             'granularity': 'hour',
+            'codec': 'raw',
         }
     })
 

@@ -127,12 +127,13 @@ def add_routes(app, db):
 
     @app.get('/query')
     async def query(request):
-        print('query hit')
 
         resource   = request.args.get('resource')
         start_s    = request.args.get('start')
         end_s      = request.args.get('end')
         chunk_rows = int(request.args.get('chunk_rows', '600'))
+
+        print('query start', resource, start_s, end_s, chunk_rows)
 
         if not resource or not start_s or not end_s:
             return 'Missing resource, start or end', 400
@@ -354,6 +355,7 @@ def main(host='0.0.0.0', port=80, debug=True):
             'columns': columns,
             'dtype': 'int16',
             'granularity': 'hour',
+            'codec': 'raw',
         },
     })
 

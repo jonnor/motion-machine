@@ -342,8 +342,8 @@ class MicroHive:
             t_total_ms = _ticks_diff(_ticks_ms(), t0)
             t_other_ms = max(0, t_total_ms - t_enum_ms - t_open_ms
                              - t_skip_ms - t_read_ms - t_copy_ms - t_yield_ms)
-            print("[query debug] resource={} partitions={} rows_read={} rows_skipped={}".format(
-                resource, n_partitions, n_rows_read, n_rows_skipped))
+            print("[query debug] resource={} chunk={} partitions={} rows_read={} rows_skipped={}".format(
+                resource, chunk_rows, n_partitions, n_rows_read, n_rows_skipped))
             print("[query debug] total={}ms  enum={}ms  open={}ms  skip={}ms  read={}ms  copy={}ms  yield={}ms  other={}ms".format(
                 t_total_ms, t_enum_ms, t_open_ms, t_skip_ms,
                 t_read_ms, t_copy_ms, t_yield_ms, t_other_ms))
