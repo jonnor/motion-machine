@@ -107,12 +107,13 @@ def _s9_decode_into(raw, n_words, n_values, dst, base, stride, seed):
     Decode n_words Simple9 words from raw bytes, undoing zigzag+delta inline.
     Writes results into dst starting at base with given stride.
     Stops after n_values values.
+    Unpacks all words at once for performance.
     """
+    words   = struct.unpack('<{}I'.format(n_words), raw[:n_words * 4])
     emitted = 0
     idx     = base
     prev    = seed
-    for wi in range(n_words):
-        word = struct.unpack('<I', raw[wi*4:wi*4+4])[0]
+    for word in words:
         sel  = (word >> 28) & 0xF
         if sel >= len(_S9_SELECTORS):
             raise ValueError("Invalid Simple9 selector: {}".format(sel))
@@ -172,7 +173,7 @@ class Writer:
         try:
             with open(path, 'rb') as f:
                 magic, ver, nc, cs = struct.unpack(_FILE_HEADER_FMT,
-                                                   f.read(_FILE_HEADER_SIZE))
+                                               f.read(_FILE_HEADER_SIZE))
             if magic != _FILE_MAGIC:
                 raise ValueError("Not a delta_simple9 file")
             if nc != n_cols or cs != chunk_size:
@@ -183,7 +184,6 @@ class Writer:
             self._file.write(struct.pack(_FILE_HEADER_FMT,
                                          _FILE_MAGIC, _FILE_VERSION,
                                          n_cols, chunk_size))
-            self._file.flush()
 
     def write_rows(self, data, offset=0, n_rows=None):
         """Append rows from array.array('h') in row-major C layout.
@@ -217,8 +217,6 @@ class Writer:
             pos    += take * nc
             n_rows -= take
 
-        self._file.flush()
-
     def write_row(self, row, offset=0):
         """Append one row: values taken from row[offset:offset+n_cols]."""
         buf_r = self._buf_rows
@@ -231,12 +229,14 @@ class Writer:
             self._flush()
 
     def flush(self):
-        """Force flush any buffered rows as a partial chunk."""
+        """Force flush buffered rows and fsync to disk."""
         if self._buf_rows > 0:
             self._flush()
+        self._file.flush()
 
     def close(self):
         self.flush()
+        self._file.flush()
         self._file.close()
 
     def __enter__(self):
@@ -260,7 +260,6 @@ class Writer:
             fw(struct.pack(_COL_HEADER_FMT, seed, n_words, n_rows))
             fw(bytes(word_buf[:n_words]))
 
-        self._file.flush()
         self._buf_rows = 0
 
 
@@ -297,6 +296,7 @@ class Reader:
     @property
     def chunk_size(self):
         return self._chunk_size
+
 
     def read_chunk_into(self, out):
         """

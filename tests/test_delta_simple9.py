@@ -2,11 +2,12 @@
 test_tscompress.py - Test suite for tscompress.py
 """
 import sys
-sys.path.insert(0, '/mnt/user-data/outputs')
+sys.path.insert(0, '.')
 
 import array
 import os
 import delta_simple9 as tc
+import time
 
 PATH = '/tmp/ds9_test.des9'
 
@@ -238,6 +239,87 @@ for t in TESTS:
         failed += 1
 remove()
 
-print(f"\n{passed}/{passed+failed} passed")
+print("\n{}/{} passed".format(passed, passed+failed))
 if failed:
     sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Benchmarks
+# ---------------------------------------------------------------------------
+
+def _ms():
+    try: return time.ticks_ms()
+    except AttributeError: return int(time.time() * 1000)
+
+def _diff(t):
+    try: return time.ticks_diff(time.ticks_ms(), t)
+    except AttributeError: return int(time.time() * 1000) - t
+
+def bench_encode_1000_rows():
+    """Benchmark write_rows: 1000 rows, 2 cols, repeated 20x."""
+    d = array.array('h')
+    for i in range(1000): d.append(i % 30000); d.append((i+1) % 30000)
+    w = tc.Writer('/tmp/bench_enc.des9', 2, 128)
+    t = _ms()
+    for _ in range(20):
+        w.write_rows(d)
+    elapsed = _diff(t)
+    w.close()
+    os.remove('/tmp/bench_enc.des9')
+    rows_per_ms = 20000 / elapsed if elapsed else 0
+    print("  bench_encode: 20x1000 rows in {}ms  ({:.0f} rows/ms)".format(elapsed, rows_per_ms))
+    check(elapsed < 5000, "encode too slow: {}ms".format(elapsed))
+
+def bench_decode_1000_rows():
+    """Benchmark read_chunk_into: decode 1000 rows, 2 cols, repeated 20x."""
+    d = array.array('h')
+    for i in range(1000): d.append(i % 30000); d.append((i+1) % 30000)
+    with tc.Writer('/tmp/bench_dec.des9', 2, 128) as w:
+        w.write_rows(d)
+    buf = array.array('h', [0] * (128 * 2))
+    t = _ms()
+    for _ in range(20):
+        with tc.Reader('/tmp/bench_dec.des9') as r:
+            while r.read_chunk_into(buf): pass
+    elapsed = _diff(t)
+    os.remove('/tmp/bench_dec.des9')
+    rows_per_ms = 20000 / elapsed if elapsed else 0
+    print("  bench_decode: 20x1000 rows in {}ms  ({:.0f} rows/ms)".format(elapsed, rows_per_ms))
+    check(elapsed < 5000, "decode too slow: {}ms".format(elapsed))
+
+def bench_struct_unpack():
+    """Benchmark struct.unpack patterns: per-word vs bulk."""
+    import struct
+    raw = bytes(range(256)) * 16  # 4096 bytes = 1024 uint32 words
+    n   = 1024
+
+    # Per-word unpack (current approach)
+    t = _ms()
+    for _ in range(100):
+        for wi in range(n):
+            struct.unpack('<I', raw[wi*4:wi*4+4])
+    t_per_word = _diff(t)
+
+    # Bulk unpack
+    fmt = '<{}I'.format(n)
+    t = _ms()
+    for _ in range(100):
+        struct.unpack(fmt, raw[:n*4])
+    t_bulk = _diff(t)
+
+    print("  struct.unpack 1024 words x100: per-word={}ms  bulk={}ms  speedup={:.1f}x".format(
+        t_per_word, t_bulk, t_per_word/t_bulk if t_bulk else 0))
+
+BENCH_TESTS = [
+    bench_struct_unpack,
+    bench_encode_1000_rows,
+    bench_decode_1000_rows,
+]
+
+print("\n--- benchmarks ---")
+for b in BENCH_TESTS:
+    try:
+        b()
+    except Exception as e:
+        print("BENCH FAIL:", b.__name__, "-", e)

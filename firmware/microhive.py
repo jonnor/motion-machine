@@ -23,7 +23,7 @@ import delta_simple9
 # ---------------------------------------------------------------------------
 TYPECODE       = 'h'
 ITEMSIZE       = 2
-DS9_CHUNK_SIZE = 128
+DS9_CHUNK_SIZE = 256
 
 # ---------------------------------------------------------------------------
 # Monotonic clock
@@ -192,56 +192,49 @@ def _makedirs(path):
             raise OSError("makedirs failed at {}: {}".format(current, e))
 
 # ---------------------------------------------------------------------------
-# Segment reader — reads one segment fully into out_buf, file closed before
-# any yield. Returns (rows_written, resume_abs_row): resume_abs_row > 0 means
-# out_buf filled up mid-segment; caller should call again with
-# part_row_start=resume_abs_row and start_buf_rows=0 after yielding out_buf.
+# Segment reader — generator, Reader held open across yields (GC-safe: the
+# generator frame keeps the Reader referenced). Writes directly into buf at
+# buf_rows offset, yields updated buf_rows when buf is full, final yield
+# gives remaining buf_rows so caller can flush.
 # ---------------------------------------------------------------------------
-def _read_segment_into(path, n_cols, part_row_start, part_row_end, first_row,
-                       decode_buf, out_buf, start_buf_rows, cap):
+def _stream_segment(path, n_cols, part_row_start, part_row_end, first_row,
+                    decode_buf, buf, chunk_rows, buf_rows):
     """
-    Read rows [part_row_start, part_row_end) from segment into out_buf
-    starting at start_buf_rows, writing at most cap rows.
-    File is fully closed before returning.
-    Returns (rows_written, resume_abs_row): resume_abs_row==0 means fully done.
+    Stream rows [part_row_start, part_row_end) from segment directly into buf.
+    Yields buf_rows each time buf is full (== chunk_rows); caller yields buf
+    to consumer then calls send(0) to reset. Final yield gives remaining count.
     """
-    buf_rows = start_buf_rows
     file_row = first_row
-    resume   = 0
-
+    try:
+        import gc; gc.collect()
+    except: pass
     r = delta_simple9.Reader(path)
     try:
         while True:
             n = r.read_chunk_into(decode_buf)
             if n == 0:
                 break
-
             chunk_abs_start = file_row
             chunk_abs_end   = file_row + n
             file_row        = chunk_abs_end
-
             if chunk_abs_end <= part_row_start:
                 continue
             if chunk_abs_start >= part_row_end:
                 break
-
             local_start = max(0, part_row_start - chunk_abs_start)
             local_end   = min(n,  part_row_end   - chunk_abs_start)
-
             for row_i in range(local_start, local_end):
-                if buf_rows - start_buf_rows >= cap:
-                    resume = chunk_abs_start + row_i
-                    return buf_rows - start_buf_rows, resume
                 src = row_i   * n_cols
                 dst = buf_rows * n_cols
                 for i in range(n_cols):
-                    out_buf[dst + i] = decode_buf[src + i]
+                    buf[dst + i] = decode_buf[src + i]
                 buf_rows += 1
+                if buf_rows == chunk_rows:
+                    yield buf_rows
+                    buf_rows = 0
     finally:
         r.close()
-
-    return buf_rows - start_buf_rows, 0
-
+    yield buf_rows  # remaining rows
 # ---------------------------------------------------------------------------
 class MicroHive:
     """
@@ -264,6 +257,8 @@ class MicroHive:
         self._resources = resources
         self._last_partition = {}
         self.debug      = debug
+        # Writer cache: keeps one Writer open per partition to amortize flash open/close cost
+        self._writers   = {}
 
     def _res(self, name):
         if name not in self._resources:
@@ -331,29 +326,25 @@ class MicroHive:
                 # Stream rows from segment directly into buf.
                 # _iter_segment holds the file open across yields — safe because
                 # the generator frame keeps Reader referenced (MicroPython GC tested).
-                # Read segment in cap-sized slices, closing the file between
-                # each yield so no Reader is open across a yield point.
-                seg_start = part_row_start
-                while True:
-                    cap = chunk_rows - buf_rows
-                    t_r = _ticks_ms()
-                    written, resume = _read_segment_into(path, n_cols,
-                                                         seg_start, part_row_end,
-                                                         first_row, decode_buf,
-                                                         buf, buf_rows, cap)
-                    t_read_ms   += _ticks_diff(_ticks_ms(), t_r)
-                    buf_rows    += written
-                    n_rows_read += written
-
-                    if buf_rows >= chunk_rows:
-                        t_before    = _ticks_ms()
+                # Stream segment directly into buf via generator.
+                # Reader stays open across yields — safe: generator frame
+                # holds the Reader reference, preventing GC collection.
+                t_r = _ticks_ms()
+                for new_buf_rows in _stream_segment(path, n_cols,
+                                                    part_row_start, part_row_end,
+                                                    first_row, decode_buf,
+                                                    buf, chunk_rows, buf_rows):
+                    t_read_ms += _ticks_diff(_ticks_ms(), t_r)
+                    if new_buf_rows == chunk_rows:
+                        n_rows_read += new_buf_rows - buf_rows
+                        buf_rows     = 0
+                        t_before     = _ticks_ms()
                         yield buf
-                        t_yield_ms += _ticks_diff(_ticks_ms(), t_before)
-                        buf_rows    = 0
-
-                    if resume == 0:
-                        break
-                    seg_start = resume
+                        t_yield_ms  += _ticks_diff(_ticks_ms(), t_before)
+                    else:
+                        n_rows_read += new_buf_rows - buf_rows
+                        buf_rows     = new_buf_rows
+                    t_r = _ticks_ms()
 
         if buf_rows > 0:
             t_before = _ticks_ms()
@@ -447,24 +438,23 @@ class MicroHive:
             _makedirs(pdir)
             t_mkdir_ms += _ticks_diff(_ticks_ms(), t0m)
 
-            # Use existing file if one already exists, else create with first_row.
-            # Try the expected path first to avoid listdir on every call.
-            expected_path = _data_file(pdir, resource, first_row)
-            try:
-                os.stat(expected_path)
-                path = expected_path
-            except OSError:
-                existing = _find_data_files(pdir, resource)
-                path = existing[0][1] if existing else expected_path
-
             t0o = _ticks_ms()
-            w = delta_simple9.Writer(path, n_cols, DS9_CHUNK_SIZE)
-            n_writer_opens += 1
+            w = self._writers.get(pdir)
+            if w is None:
+                expected_path = _data_file(pdir, resource, first_row)
+                try:
+                    os.stat(expected_path)
+                    path = expected_path
+                except OSError:
+                    existing = _find_data_files(pdir, resource)
+                    path = existing[0][1] if existing else expected_path
+                w = delta_simple9.Writer(path, n_cols, DS9_CHUNK_SIZE)
+                self._writers[pdir] = w
+                n_writer_opens += 1
             t_writer_ms += _ticks_diff(_ticks_ms(), t0o)
 
             t0w = _ticks_ms()
             w.write_rows(data, data_offset * n_cols, rows_in_current)
-            w.close()
             t_write_ms += _ticks_diff(_ticks_ms(), t0w)
 
             data_offset += rows_in_current
@@ -472,6 +462,26 @@ class MicroHive:
         if self.debug:
             print("[append_data] writer_opens={} key={}ms mkdir={}ms writer_open={}ms write={}ms".format(
                 n_writer_opens, t_key_ms, t_mkdir_ms, t_writer_ms, t_write_ms))
+
+    # ------------------------------------------------------------------
+    # Writer lifecycle
+    # ------------------------------------------------------------------
+    def flush(self):
+        """Flush all open partition Writers to disk."""
+        for w in self._writers.values():
+            w.flush()
+
+    def close(self):
+        """Flush and close all open partition Writers."""
+        for w in self._writers.values():
+            w.close()
+        self._writers = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
 
     # ------------------------------------------------------------------
     # Info
