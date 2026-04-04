@@ -23,6 +23,10 @@ try:
     import raw16
 except ImportError:
     raw16 = None
+try:
+    import raw16col
+except ImportError:
+    raw16col = None
 
 # ---------------------------------------------------------------------------
 TYPECODE       = 'h'
@@ -30,11 +34,16 @@ ITEMSIZE       = 2
 DS9_CHUNK_SIZE = 256
 
 def _codec(cfg):
-    """Return the codec module for a resource config ('compressed' or 'raw')."""
-    if cfg.get('codec', 'compressed') == 'raw':
+    """Return codec module: 'compressed' (default), 'raw', or 'raw_col'."""
+    c = cfg.get('codec', 'compressed')
+    if c == 'raw':
         if raw16 is None:
             raise ImportError("raw16 module not available")
         return raw16
+    if c == 'raw_col':
+        if raw16col is None:
+            raise ImportError("raw16col module not available")
+        return raw16col
     return delta_simple9
 
 # ---------------------------------------------------------------------------
@@ -342,8 +351,8 @@ class MicroHive:
             t_total_ms = _ticks_diff(_ticks_ms(), t0)
             t_other_ms = max(0, t_total_ms - t_enum_ms - t_open_ms
                              - t_skip_ms - t_read_ms - t_copy_ms - t_yield_ms)
-            print("[query debug] resource={} chunk={} partitions={} rows_read={} rows_skipped={}".format(
-                resource, chunk_rows, n_partitions, n_rows_read, n_rows_skipped))
+            print("[query debug] resource={} partitions={} rows_read={} rows_skipped={}".format(
+                resource, n_partitions, n_rows_read, n_rows_skipped))
             print("[query debug] total={}ms  enum={}ms  open={}ms  skip={}ms  read={}ms  copy={}ms  yield={}ms  other={}ms".format(
                 t_total_ms, t_enum_ms, t_open_ms, t_skip_ms,
                 t_read_ms, t_copy_ms, t_yield_ms, t_other_ms))
