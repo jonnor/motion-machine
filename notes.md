@@ -1,29 +1,53 @@
 
-# Timeseries database
+# Presentation-ready
 
 Must
 
-- push raw accelerometer data, integrate window computations
+- fix time partitioning when loading accelerometer data
+- setup a minimally useful tree-based classifier
 
 Should
 
+- Features. Orientation with lowpass, pitch/yaw
+- Features. Spectral. Energy, Dominant freq, entropy, centroid, spread.
+Cutoff lower and upper?
 - Add end-to-end test for data processing, taking from pamap2_25hz
+- PCA decomposition for feature selection.
+- Compute class durations from classifier, store and visualize
 - Add link/button for "Open in Jupyter"
-
-Nice
-
-- push acceleration data over HTTP API, for testing
 
 Want
 
+- Features. Cross-axis information
+- Features. Band energies. 4-5 bands
+- UI. Scatterplot matrix over features. Time windows selection
+- UI. Label sections on timeline.
+- Implement some "standard" classifier model.
+- Frontend. Cluster windows data using emlearn_kmeans. See on timeline
+- Few-shot learning using emlearn_neighbors
 - Train model in-browser using MicroPython with emlearn_extratrees
 
 Demo maybe
 
-- add some liveness indicator to watch, ex battery voltage on screen
-- handle button press. Enable POWERON IRQ in AXP2101, IQR handler on pin 21
-- 
+- add some graphics on screen. Using micropython-touch
+- handle button press wakeup. Enable POWERON IRQ in AXP2101, IQR handler on pin 21
+- allow to add labels via screen
 
+Nice-to-have
+
+- push acceleration data over HTTP API, for testing
+
+Database
+
+- Column selection/filtering.
+
+# Workflow
+
+- Data collection
+- Explore. Cluster
+- Label.
+- Classifier training
+- Reprocess entire. Visualize overall. Class proportions, timeline.
 
 # Improving compression
 
