@@ -120,6 +120,32 @@ def _power_iteration(M, n, n_iter, vec_out, tmp):
     return _dot_ff(vec_out, tmp, n)
 
 
+
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
+# Accepted array.array typecodes
+_ACCEPTED_TYPECODES = ('h', 'f', 'b', 'B', 'i', 'I', 'l', 'L', 'd')
+
+def _check_input(X):
+    """
+    Raise TypeError for array.array with unsupported typecodes.
+    Passes silently for plain lists/tuples and accepted typecodes.
+    """
+    if isinstance(X, array.array):
+        tc = None
+        # MicroPython does not expose .typecode; try reading it safely
+        try:
+            tc = X.typecode
+        except AttributeError:
+            pass  # MicroPython — cannot check, trust the caller
+        if tc is not None and tc not in _ACCEPTED_TYPECODES:
+            raise TypeError(
+                "array.array typecode '" + tc + "' not supported. "
+                "Use 'h' (int16) or 'f' (float32)."
+            )
+
 # ---------------------------------------------------------------------------
 # PCA class
 # ---------------------------------------------------------------------------
@@ -161,10 +187,12 @@ class PCA:
 
         Parameters
         ----------
-        X        : array.array('h') or flat sequence, shape n_samples x n_features
-                   Typecode 'h' (int16) is accepted; converted to float internally.
+        X        : array.array('h') or array.array('f'), flat n_samples x n_features.
+                   Both int16 ('h') and float32 ('f') are accepted.
+                   Any flat sequence whose elements support float() also works.
         n_samples: int  — number of rows in X
         """
+        _check_input(X)
         n_feat = len(X) // n_samples
         self.n_features_ = n_feat
         nc = self.n_components
@@ -215,7 +243,7 @@ class PCA:
 
         Parameters
         ----------
-        X        : array.array('h'), flat n_samples x n_features
+        X        : array.array('h') or array.array('f'), flat n_samples x n_features
         n_samples: int
         out      : optional pre-allocated array.array('f') of length
                    n_samples * n_components. Allocated if not provided.
@@ -254,9 +282,15 @@ class PCA:
     # ------------------------------------------------------------------
     def transform_one(self, sample, out=None):
         """
-        Project a single sample (array.array 'h', length n_features).
+        Project a single sample.
 
-        Returns array.array('f') of length n_components.
+        Parameters
+        ----------
+        sample : array.array('h') or array.array('f'), length n_features
+
+        Returns
+        -------
+        out : array.array('f') of length n_components
         """
         n_feat = self.n_features_
         nc = self.n_components
@@ -293,6 +327,5 @@ def _center(X, n_samples, n_feat, mean_, out):
         base = s * n_feat
         for j in range(n_feat):
             out[base + j] = float(X[base + j]) - mean_[j]
-
 
 

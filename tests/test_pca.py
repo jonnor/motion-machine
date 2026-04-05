@@ -430,6 +430,61 @@ def test_edge_many_components():
     proj = pca.fit_transform(X, 50)
     assert_true(len(proj) == 50 * 5)
 
+
+# ---------------------------------------------------------------------------
+# Tests: float32 ('f') input
+# ---------------------------------------------------------------------------
+
+def test_fit_accepts_float32_input():
+    X_f = array.array('f', [float(v) for v in _make_dataset(20, 4, [0]*4, 100, seed=20)])
+    pca = PCA(n_components=2)
+    pca.fit(X_f, 20)
+    assert_true(pca.n_features_ == 4)
+
+def test_fit_float32_mean_matches_int16():
+    # Same data as int16 and float32 should give same mean
+    X_h = _make_dataset(30, 4, [100, 200, 50, 300], 80, seed=21)
+    X_f = array.array('f', [float(v) for v in X_h])
+    pca_h = PCA(n_components=2)
+    pca_h.fit(X_h, 30)
+    pca_f = PCA(n_components=2)
+    pca_f.fit(X_f, 30)
+    for j in range(4):
+        assert_close(pca_h.mean_[j], pca_f.mean_[j], tol=1e-3)
+
+def test_transform_float32_matches_int16():
+    X_h = _make_dataset(30, 4, [100, 200, 50, 300], 80, seed=22)
+    X_f = array.array('f', [float(v) for v in X_h])
+    pca = PCA(n_components=2)
+    pca.fit(X_h, 30)
+    proj_h = pca.transform(X_h, 30)
+    proj_f = pca.transform(X_f, 30)
+    assert_close_arr(proj_h, proj_f, tol=1e-3)
+
+def test_fit_transform_float32_output_length():
+    X_f = array.array('f', [float(v) for v in _make_dataset(25, 5, [0]*5, 200, seed=23)])
+    pca = PCA(n_components=3)
+    proj = pca.fit_transform(X_f, 25)
+    assert_true(len(proj) == 25 * 3)
+
+def test_transform_one_float32_matches_int16():
+    X_h = _make_dataset(30, 4, [100, 200, 50, 300], 80, seed=24)
+    X_f = array.array('f', [float(v) for v in X_h])
+    pca = PCA(n_components=2)
+    pca.fit(X_h, 30)
+    sample_h = array.array('h', X_h[:4])
+    sample_f = array.array('f', [float(v) for v in X_h[:4]])
+    out_h = pca.transform_one(sample_h)
+    out_f = pca.transform_one(sample_f)
+    assert_close_arr(out_h, out_f, tol=1e-3)
+
+def test_fit_float32_explained_ratio_valid():
+    X_f = array.array('f', [float(v) for v in _make_dataset(40, 4, [0]*4, 300, seed=25)])
+    pca = PCA(n_components=2)
+    pca.fit(X_f, 40)
+    total = sum(pca.explained_ratio_[c] for c in range(2))
+    assert_true(0.0 < total <= 1.001, "ratio sum=" + str(total))
+
 # ---------------------------------------------------------------------------
 # Test runner
 # ---------------------------------------------------------------------------
