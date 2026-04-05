@@ -12,7 +12,11 @@ Should
 
 Nice
 
-- push acceleration data over HTTP API
+- push acceleration data over HTTP API, for testing
+
+Want
+
+- Train model in-browser using MicroPython with emlearn_extratrees
 
 Demo maybe
 
