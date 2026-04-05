@@ -1,22 +1,41 @@
 
 # Timeseries database
 
-- fix appending data very inefficient
-- push the metrics into datastore over HTTP API
+Must
+
+- push raw accelerometer data, integrate window computations
+
+Should
+
+- Add end-to-end test for data processing, taking from pamap2_25hz
+- Add link/button for "Open in Jupyter"
+
+Nice
+
+- push acceleration data over HTTP API
+
+Demo maybe
 
 - add some liveness indicator to watch, ex battery voltage on screen
-
 - handle button press. Enable POWERON IRQ in AXP2101, IQR handler on pin 21
+- 
 
-- add rollup hooks, push raw accelerometer data, integrate window computations
 
-- Add link/button for "Open in Jupyter"
+# Improving compression
+
+Limiting range slightly of int16 input data to, `[-16384, 16383]`
+should make it possible to fit into 16 bit after delta-zigzag.
+Maybe extending to 64-bit, Simple9b.
+But with a selector, then can only fit 4x15 integers in 64 bits.
+
 
 
 # Compression
 
 delta-zigzag-simple9b did not compress PAMAP2 features much. Net loss.
 delta-zigzag-simple9b. 406 kB in 18 seconds. Only 22 kB/s.
+
+Would likely need to add quantization to get compression benefits.
 
 raw16. 396 kB in 3 seconds. 132 kB/s.
 Tested maximum for reads otherwise is around 210 kB/s.

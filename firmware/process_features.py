@@ -13,14 +13,11 @@ Features per window (n_features = 7):
 
 import array
 import math
-import npyfile
 
 
 class AccelConfig:
     def __init__(
         self,
-        input_path,
-        output_path,
         n_axes=3,
         sample_rate=20,
         window_sec=4,
@@ -28,8 +25,6 @@ class AccelConfig:
         orient_scale=16384,   # 1.0  → 16384 in int16
         sma_scale=32,         # tune to your ADC range; keeps SMA in int16 range
     ):
-        self.input_path   = input_path
-        self.output_path  = output_path
         self.n_axes       = n_axes
         self.sample_rate  = sample_rate
         self.window_sec   = window_sec
@@ -95,10 +90,11 @@ def count_windows(n_samples: int, cfg: AccelConfig) -> int:
 
 # ── Main processing ────────────────────────────────────────────────────────────
 
-def process(cfg: AccelConfig) -> int:
+def process(cfg: AccelConfig, input_path, output_path) -> int:
     """Returns number of windows written."""
+    import npyfile
 
-    with npyfile.Reader(cfg.input_path) as reader:
+    with npyfile.Reader(input_path) as reader:
         shape = reader.shape
         assert len(shape) == 2 and shape[1] == cfg.n_axes, \
             f"Expected (N, {cfg.n_axes}) array, got {shape}"
@@ -122,7 +118,7 @@ def process(cfg: AccelConfig) -> int:
         ring     = array.array('h', [0] * ring_cap)
         ring_len = 0
 
-        with npyfile.Writer(cfg.output_path,
+        with npyfile.Writer(output_path,
                             shape=(n_windows, cfg.n_features),
                             typecode='h') as outfile:
 
@@ -155,26 +151,15 @@ def process(cfg: AccelConfig) -> int:
             return window_count
 
 
-# ── Sanity check ───────────────────────────────────────────────────────────────
-
-def verify(cfg: AccelConfig, expected_windows: int) -> None:
-    shape, data = npyfile.load(cfg.output_path)
-    assert shape[0] == expected_windows, \
-        f"Expected {expected_windows} windows, got {shape[0]}"
-    assert shape[1] == cfg.n_features
-    print("Output shape:", shape)
-    print("First window features (int16):")
-    labels = ("orient_x", "orient_y", "orient_z", "sma", "mean_x", "mean_y", "mean_z")
-    for i, label in enumerate(labels):
-        print(f"  {label:10s}: {data[i]}")
-
 
 if __name__ == '__main__':
     # ── Entry point ────────────────────────────────────────────────────────────────
 
     cfg = AccelConfig(
+
+    )
+    n = process(cfg,
         input_path='data/pamap2_20hz.npy',
         output_path='data/pamap2_features.npy',
     )
-    n = process(cfg)
-    #verify(cfg, n)
+

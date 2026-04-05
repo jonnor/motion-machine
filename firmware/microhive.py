@@ -455,8 +455,8 @@ class MicroHive:
             data_offset += rows_in_current
 
         if self.debug:
-            print("[append_data] writer_opens={} key={}ms mkdir={}ms writer_open={}ms write={}ms".format(
-                n_writer_opens, t_key_ms, t_mkdir_ms, t_writer_ms, t_write_ms))
+            print("[append_data] resource={} writer_opens={} key={}ms mkdir={}ms writer_open={}ms write={}ms".format(
+                resource, n_writer_opens, t_key_ms, t_mkdir_ms, t_writer_ms, t_write_ms))
 
     # ------------------------------------------------------------------
     # Writer lifecycle
