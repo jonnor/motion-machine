@@ -212,7 +212,7 @@ class Application():
 
     def process_accelerometer(self, accel):
 
-        print('process-accelerometer', len(accel), accel)
+        print('process-accelerometer', len(accel))
 
         # store raw data
         self.db.append_data('raw', accel)

@@ -9,7 +9,7 @@ import numpy
 
 def save_compressed_sequence(data, out_path):
 
-    # Select only data from one IMU, 6 axis
+    # Select only data from one IMU, 3 or 6 axis
     columns = [
         'hand_acceleration_6g_x',
         'hand_acceleration_6g_y',
@@ -20,8 +20,8 @@ def save_compressed_sequence(data, out_path):
     ]
     sel = data[columns].reset_index()
 
-    # Downsample to 20hz
-    freq = '50ms'
+    # Downsample to 25hz
+    freq = '40ms'
     resampled = (
         sel.groupby('subject', observed=True)
         .apply(lambda g: g.set_index('time').resample(freq).mean())
@@ -62,7 +62,8 @@ def save_compressed_sequence(data, out_path):
 def main():
 
     data_path = '/home/jon/projects/leaf-clustering-random-forests/data/processed/pamap2.parquet'
-    out_path = 'data/pamap2_20hz.parquet'
+    out_path = 'data/pamap2_25hz.parquet'
+    out_npy = 'data/pamap2_25hz.npy'
 
     data = pandas.read_parquet(data_path)
 
@@ -84,7 +85,6 @@ def main():
     print(loaded.head())
 
 
-    out_npy = 'data/pamap2_20hz.npy'
     print('Save as npy')
     a = numpy.ascontiguousarray(loaded)
     numpy.save(out_npy, a, allow_pickle=False)
