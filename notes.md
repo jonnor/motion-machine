@@ -8,11 +8,11 @@ Must
 
 Should
 
-- Features. Orientation with lowpass, pitch/yaw
+- Features. Orientation with IIR lowpass, pitch/yaw
 - Features. Spectral. Energy, Dominant freq, entropy, centroid, spread.
-Cutoff lower and upper?
+Cutoff lower and upper in FFT before feature comp?
 - Add end-to-end test for data processing, taking from pamap2_25hz
-- PCA decomposition for feature selection.
+- UI. Show PCA clustered features.
 - Compute class durations from classifier, store and visualize
 - Add link/button for "Open in Jupyter"
 
@@ -23,7 +23,8 @@ Want
 - UI. Scatterplot matrix over features. Time windows selection
 - UI. Label sections on timeline.
 - Implement some "standard" classifier model.
-- Frontend. Cluster windows data using emlearn_kmeans. See on timeline
+- Frontend. Cluster windows data using k-means. See on timeline.
+Fix emlearn_kmeans for float and/or int16.
 - Few-shot learning using emlearn_neighbors
 - Train model in-browser using MicroPython with emlearn_extratrees
 
@@ -40,6 +41,7 @@ Nice-to-have
 Database
 
 - Column selection/filtering.
+
 
 # Workflow
 
