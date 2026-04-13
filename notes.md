@@ -3,18 +3,21 @@
 
 Must
 
-- fix time partitioning when loading accelerometer data
-- setup a minimally useful tree-based classifier
+- Do some data recording, ensure can see status. And enable/disable?
+- Maybe add watchdog to ensure no hangups?
+- Fix time partitioning when loading accelerometer data historically
+- Setup a minimally useful tree-based classifier
 
 Should
 
 - Features. Orientation with IIR lowpass, pitch/yaw
 - Features. Spectral. Energy, Dominant freq, entropy, centroid, spread.
 Cutoff lower and upper in FFT before feature comp?
-- Add end-to-end test for data processing, taking from pamap2_25hz
-- UI. Show PCA clustered features.
+- UI. Show PCA clustered features. In scatter and timeline
 - Compute class durations from classifier, store and visualize
 - Add link/button for "Open in Jupyter"
+- Add end-to-end test for data processing, taking from pamap2_25hz
+
 
 Want
 
@@ -27,6 +30,7 @@ Want
 Fix emlearn_kmeans for float and/or int16.
 - Few-shot learning using emlearn_neighbors
 - Train model in-browser using MicroPython with emlearn_extratrees
+- Clustering. Show PCA variance explained over components
 
 Demo maybe
 
@@ -42,6 +46,12 @@ Database
 
 - Column selection/filtering.
 
+Cleanups
+
+- Move PCA and scaler into emlearn-micropython. Make clustering example, include ReservoirSampler
+- Move Microhive to separate git repo, mip installable
+- Move feature calculations into emlearn-micropython. HAR example?
+- emlearn-micropyton. Run tests also in browser
 
 # Workflow
 
