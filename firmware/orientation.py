@@ -1,7 +1,13 @@
 
 import math
 import array
+
+import emlearn_iir
+
+#print(dir(emlearn_iir))
     
+#emlearn_iir.new([0.0])
+
 class GravityEstimatorLowpass:
     """Estimate gravity vector from IMU data using a low-pass"""
     
@@ -11,7 +17,7 @@ class GravityEstimatorLowpass:
         self.gravity = array.array('f', [0.0, 0.0, 0.0])
 
         # one filter per XYZ axis
-        self.filters = [ emlearn_iir.new(coefficients) for i in range(0, 3) ]
+        self.filters = [ emlearn_iir.new(coefficients) for i in range(3) ]
 
 
     def update(self, accel : array.array):
@@ -32,11 +38,12 @@ class GravityEstimatorLowpass:
         # but when we would have to deinterleave temporary array anyway
         arr = array.array('f', [0.0])
         for axis in range(0, 3):
-            filter_func = self.filter[i].run
+            filter_func = self.filters[axis].run
             for sample in range(n_samples):
                 index = (sample*3)+axis
                 arr[0] = accel[index]
-                self.gravity[axis] = filter_func(arr)
+                out = filter_func(arr)
+                self.gravity[axis] = arr[0]
 
         return self.gravity
 

@@ -10,9 +10,10 @@ Must
 
 Should
 
-- Features. Orientation with IIR lowpass, pitch/yaw
+- INTEGRATE. Features. Orientation with IIR lowpass, pitch/yaw. 
 - Features. Spectral. Energy, Dominant freq, entropy, centroid, spread.
 Cutoff lower and upper in FFT before feature comp?
+Note, the emlearn-micropython paper example has some FFT code
 - UI. Show PCA clustered features. In scatter and timeline
 - Compute class durations from classifier, store and visualize
 - Add link/button for "Open in Jupyter"

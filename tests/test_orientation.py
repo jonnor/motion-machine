@@ -1,6 +1,8 @@
 
 import sys
 import array
+import math
+import random
 
 from orientation import GravityEstimatorLowpass, normalize_gravity, compute_tilt
 
@@ -17,13 +19,110 @@ def assert_close_arr(a, b, tol=1e-3, msg=""):
                 msg or ("index " + str(i) + ": " + str(a[i]) + " vs " + str(b[i]))
             )
 
+
+def simulate_accelerometer(duration,
+        samplerate=25,
+        noise_std=0.02,
+        roll_rate=0.3,
+        pitch_rate=0.2,
+    ):
+    """
+    Simulates slow device rotation with accelerometer noise.
+    Yields (t, [ax, ay, az]) samples.
+    """
+    dt = 1.0 / samplerate
+    t = 0.0
+    samples = int(duration*samplerate)
+
+    for i in range(samples):
+        roll  = roll_rate  * t
+        pitch = pitch_rate * t
+
+        # Gravity vector in device frame (unit vector pointing "down")
+        ax = -math.sin(pitch)
+        ay =  math.cos(pitch) * math.sin(roll)
+        az =  math.cos(pitch) * math.cos(roll)
+
+        # Add gaussian noise (Box-Muller)
+        def gauss():
+            u1 = random.random() or 1e-10
+            u2 = random.random()
+            return math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
+
+        ax += gauss() * noise_std
+        ay += gauss() * noise_std
+        az += gauss() * noise_std
+
+        yield t, [ax, ay, az]
+        t += dt
+
 # -----
 # Tests
 # -----
 def test_gravity_estimator():
 
-    pass
-    #est = GravityEstimatorLowpass()
+    import npyfile
+
+    # From tools/orientation.py
+    filter = {
+        'samplerate': 25.0,
+        'coefficients': [1.32937288987529e-05, 2.65874577975058e-05, 1.32937288987529e-05, 1.0, -1.778313488139435, 0.7924474718329468,
+                         1.0, 2.0, 1.0, 1.0, -1.8934156010225003, 0.9084644129492953],
+        'order': 4,
+        'cutoff': 0.5,
+    }
+
+    coefficients = array.array('f', filter['coefficients'])
+    est = GravityEstimatorLowpass(coefficients)
+
+    duration = 20.0
+    samplerate = 25
+    accelerometer_stream = simulate_accelerometer(\
+        duration=duration,
+        samplerate=samplerate,
+        noise_std=0.20,
+        roll_rate=0.4,
+        pitch_rate=0.3,
+    )
+    expect_samples = int(duration*samplerate)
+
+    # Log the data so that it can be checked/visualized
+    out_columns = [
+        'time',
+        'acc_x', 'acc_y', 'acc_z',
+        'orientation_x', 'orientation_y', 'orientation_z',
+        'pitch', 'roll',
+    ]
+    out = array.array('f', (0.0 for _ in range(len(out_columns))))
+    out_typecode = 'f'
+    out_shape = (expect_samples, len(out))
+    output_path = 'test_gravity_estimator_rotations.npy'
+    with npyfile.Writer(output_path,
+                        shape=out_shape,
+                        typecode=out_typecode) as outfile:
+
+        sample = 0
+        for t, xyz in accelerometer_stream:
+            sample += 1
+            gravity = est.update(xyz)
+            norm = normalize_gravity(gravity)
+            pitch, roll = compute_tilt(gravity)
+
+            # XXX: careful to match column order
+            out[0] = t
+            out[1] = xyz[0]
+            out[2] = xyz[1]
+            out[3] = xyz[2]
+            out[4] = norm[0]
+            out[5] = norm[1]
+            out[6] = norm[2]
+            out[7] = pitch
+            out[8] = roll
+            outfile.write_values(out, typecode=out_typecode)
+
+    assert sample == expect_samples, (sample, expect_samples)
+
+    # TODO: check that pitch/roll spans entire range
 
 def test_normalize_gravity_straight():
 
