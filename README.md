@@ -9,3 +9,5 @@ but served directly from the IoT device.
 
 ## Status
 **EXPERIMENTAL**. Heavy development ongoing.
+
+See [notes.md](notes.md).

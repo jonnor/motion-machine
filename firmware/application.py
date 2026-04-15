@@ -18,7 +18,6 @@ import files
 
 from sliding_window import SlidingWindow
 from orientation import GravityEstimatorLowpass, normalize_gravity, compute_tilt
-from process_features import compute_features, AccelConfig
 
 gc.collect()
 
@@ -214,7 +213,7 @@ class RunningStats:
 
 
 class Application():
-    def __init__(self, database_dir='tsdb'):
+    def __init__(self, database_dir='tsdb', verbose=3):
 
         resources = setup_resources()
         self.db = MicroHive(database_dir, resources)
@@ -223,6 +222,8 @@ class Application():
         window_length =  int(samplerate * 4.0)
         hop_length = int(samplerate * 1.0)
         self.window = SlidingWindow(window_length, hop_length, 3)
+
+        self.verbose = verbose
 
         # feature extraction
         self.n_features = 7
@@ -292,9 +293,8 @@ class Application():
 
             # 
 
-        # FIXME: assign to feature vector - with scaling
-        #out[3] = int(sma_sum / n / cfg.sma_scale)
-
+        # Assign outputs to feature vector - with scaling
+        # TODO: support dynamic feature selection/order
         out = self.features
 
         # XXX: make sure to match order of column definition
@@ -321,14 +321,13 @@ class Application():
 
     def process_accelerometer(self, accel):
 
-        print('process-accelerometer', len(accel))
+        if self.verbose >= 2:
+            print('process-accelerometer', len(accel))
 
         # store raw data
         self.db.append_data('raw', accel)
 
         # compute overlapped window
-        cfg  = AccelConfig(sample_rate=25, hop_sec=1.0, window_sec=4.0)
-
         window = self.window.push(accel)
         if window is not None:
 
@@ -338,7 +337,8 @@ class Application():
             # store features
             self.db.append_data('features', self.features)
 
-            print('features', self.features)
+            if self.verbose >= 3:
+                print('features', self.features)
             if self.model is not None:
                 self.model.predict(self.features, self.predictions)
 
@@ -371,6 +371,10 @@ def add_routes(app, db, on_file_changed=None):
 def main(host='0.0.0.0', port=80, debug=True):
 
     state = Application()
+
+    # Load processing configuration
+    filter_path = 'orientation_lowpass.json'
+    state.load_gravity_filter(filter_path)
 
     # Start the different tasks
     status = asyncio.create_task(status_task())
