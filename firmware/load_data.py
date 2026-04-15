@@ -1,15 +1,6 @@
 
-
 """
-Accelerometer HAR feature extraction for MicroPython
-Reads raw int16 .npy (N, 3), writes features .npy (n_windows, n_features)
-
-Features per window (n_features = 7):
-  0-2 : orientation x, y, z  (int16, scaled by orient_scale)
-  3   : sma                   (int16, scaled by sma_scale, gravity-removed)
-  4   : mean_x                (int16, raw ADC units)
-  5   : mean_y
-  6   : mean_z
+Load accelerometer and process it
 """
 
 import array

@@ -5,19 +5,15 @@ Must
 
 - Do some data recording, ensure can see status. And enable/disable?
 - Maybe add watchdog to ensure no hangups?
-- Fix time partitioning when loading accelerometer data historically
 - Setup a minimally useful tree-based classifier
 
 Should
 
-- INTEGRATE. Features. Orientation with IIR lowpass, pitch/yaw
-- Features. Spectral. Energy, Dominant freq, entropy, centroid, spread.
-Cutoff lower and upper in FFT before feature comp?
-Note, the emlearn-micropython paper example has some FFT code
 - UI. Show PCA clustered features. In scatter and timeline
 - Compute class durations from classifier, store and visualize
 - Add link/button for "Open in Jupyter"
 - Add end-to-end test for data processing, taking from pamap2_25hz
+- Fix time partitioning when loading accelerometer data historically
 
 
 Want
