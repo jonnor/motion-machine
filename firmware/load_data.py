@@ -27,6 +27,9 @@ def load_file(app, input_path, chunk_rows=64, columns=3) -> int:
 
         chunk_items = chunk_rows * columns
         for chunk in reader.read_data_chunks(chunk_items):
+            if len(chunk) < chunk_items:
+                # end-of-file
+                break
 
             # FIXME: specify starting time for the data
             app.process_accelerometer(chunk)
@@ -42,6 +45,9 @@ if __name__ == '__main__':
 
     filter_path = 'firmware/orientation_lowpass.json'
     app.load_gravity_filter(filter_path)
+
+    model_path = 'firmware/pamap2.trees.csv'
+    app.load_model(model_path)
 
     data_path = 'data/pamap2_25hz.npy'
     chunks = load_file(app, data_path)

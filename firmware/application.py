@@ -156,17 +156,21 @@ def setup_resources(samplerate=25):
     if USE_TIMEBASED:
         feature_columns = [ str(i) for i in range(timebased.N_FEATURES) ]
 
+    # FIXME: check order
     class_columns = [
-        'a',
-        'b',
-        'c',
-        'd',
+        'walking',
+        'lying',
+        'standing',
+        'sitting',
+        'running',
     ],
 
     resources = {}
+    
+    hop_micros = 1_280_000
 
     resources['features'] = {
-        'hop': 1_000_000,
+        'hop': hop_micros,
         'columns': feature_columns,
         'dtype': 'int16',
         'granularity': 'hour',
@@ -174,7 +178,7 @@ def setup_resources(samplerate=25):
     }
 
     resources['predictions'] = {
-        'hop': 1_000_000,
+        'hop': hop_micros,
         'columns': class_columns,
         'dtype': 'int16',
         'granularity': 'hour',
@@ -252,7 +256,7 @@ class Application():
         model = emlearn_trees.new(15, 1000, 10)
 
         # Load a CSV file with the model
-        with open(model_path, 'r') as f:
+        with open(path, 'r') as f:
             emlearn_trees.load_model(model, f)
 
         self.predictions = array.array('f', range(model.outputs()))
@@ -397,8 +401,10 @@ class Application():
                 print('features', self.features)
             if self.model is not None:
                 self.model.predict(self.features, self.predictions)
+                scaled = array.array('h', (int(p*100) for p in self.predictions))
+                self.db.append_data('predictions', scaled)
 
-            # TODO: store predictions, at least for recent?
+
 
 
 def add_routes(app, db, on_file_changed=None):
