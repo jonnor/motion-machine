@@ -4,9 +4,6 @@ import array
 
 import emlearn_iir
 
-#print(dir(emlearn_iir))
-    
-#emlearn_iir.new([0.0])
 
 class GravityEstimatorLowpass:
     """Estimate gravity vector from IMU data using a low-pass"""

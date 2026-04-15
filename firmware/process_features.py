@@ -2,13 +2,6 @@
 """
 Accelerometer HAR feature extraction for MicroPython
 Reads raw int16 .npy (N, 3), writes features .npy (n_windows, n_features)
-
-Features per window (n_features = 7):
-  0-2 : orientation x, y, z  (int16, scaled by orient_scale)
-  3   : sma                   (int16, scaled by sma_scale, gravity-removed)
-  4   : mean_x                (int16, raw ADC units)
-  5   : mean_y
-  6   : mean_z
 """
 
 import array
@@ -46,16 +39,6 @@ def compute_features(win: array.array, out: array.array, cfg: AccelConfig) -> No
     """
     n   = len(win) // cfg.n_axes
     na  = cfg.n_axes
-
-    # ── Gravity estimate (per-axis mean) ──────────────────────────────────────
-    sx = sy = sz = 0
-    j = 0
-    for _ in range(n):
-        sx += win[j]; sy += win[j+1]; sz += win[j+2]
-        j += na
-    mx = sx / n
-    my = sy / n
-    mz = sz / n
 
     # ── Orientation: normalize → unit vector → scale to int16 ────────────────
     mag = math.sqrt(mx*mx + my*my + mz*mz)

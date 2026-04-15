@@ -48,7 +48,11 @@ def load_file(app, input_path, chunk_rows=25, columns=3) -> int:
 if __name__ == '__main__':
 
     app = Application()
-    path = 'data/pamap2_25hz.npy'
-    chunks = load_file(app, path)
+
+    filter_path = 'firmware/orientation_lowpass.json'
+    app.load_gravity_filter(filter_path)
+
+    data_path = 'data/pamap2_25hz.npy'
+    chunks = load_file(app, data_path)
 
 

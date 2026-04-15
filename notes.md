@@ -10,7 +10,7 @@ Must
 
 Should
 
-- INTEGRATE. Features. Orientation with IIR lowpass, pitch/yaw. 
+- INTEGRATE. Features. Orientation with IIR lowpass, pitch/yaw
 - Features. Spectral. Energy, Dominant freq, entropy, centroid, spread.
 Cutoff lower and upper in FFT before feature comp?
 Note, the emlearn-micropython paper example has some FFT code

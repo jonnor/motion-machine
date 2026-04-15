@@ -7,6 +7,8 @@ import asyncio
 import time
 import array
 import gc
+import json
+import math
 
 from microdot import Microdot, Response, send_file
 
@@ -15,7 +17,7 @@ import microhive_api
 import files
 
 from sliding_window import SlidingWindow
-
+from orientation import GravityEstimatorLowpass, normalize_gravity, compute_tilt
 from process_features import compute_features, AccelConfig
 
 gc.collect()
@@ -132,13 +134,13 @@ async def status_task():
 def setup_resources(samplerate=25):
 
     feature_columns = [
-        'orient_x',
-        'orient_y',
-        'orient_z',
-        'sma',
-        'mean_x',
-        'mean_y',
-        'mean_z',
+        'orient_mean_x',
+        'orient_mean_y',
+        'orient_mean_z',
+        'motion_sma',
+        'orient_std_x',
+        'orient_std_y',
+        'orient_std_z',
     ]
 
     class_columns = [
@@ -177,6 +179,39 @@ def setup_resources(samplerate=25):
     return resources
 
 
+class RunningStats:
+    """Welford's online algorithm for mean, variance, and std dev."""
+
+    def __init__(self, dims):
+        self.dims = dims
+        self.count = 0
+        self.mean   = array.array('f', [0.0] * dims)
+        self._M2    = array.array('f', [0.0] * dims)
+
+    def update(self, x):
+        self.count += 1
+        for i in range(self.dims):
+            delta = x[i] - self.mean[i]
+            self.mean[i] += delta / self.count
+            self._M2[i] += delta * (x[i] - self.mean[i])
+
+    def variance(self, out=None):
+        if out is None:
+            out = array.array('f', [0.0] * self.dims)
+        if self.count < 2:
+            for i in range(self.dims):
+                out[i] = 0.0
+        else:
+            for i in range(self.dims):
+                out[i] = self._M2[i] / (self.count - 1)
+        return out
+
+    def std(self, out=None):
+        out = self.variance(out)
+        for i in range(self.dims):
+            out[i] = math.sqrt(out[i])
+        return out
+
 
 class Application():
     def __init__(self, database_dir='tsdb'):
@@ -196,6 +231,7 @@ class Application():
         # lazy-loaded
         self.predictions = None
         self.model = None
+        self.gravity = None
 
     def load_model(self, path):
 
@@ -208,6 +244,79 @@ class Application():
 
         self.predictions = array.array('f', range(model.outputs()))
         self.model = model
+
+    def load_gravity_filter(self, path):
+
+        with open(path) as f:
+            config = json.loads(f.read())
+
+        # FIXME: check samplerate
+        #config['samplerate']
+
+        coefficients = array.array('f', config['coefficients'])
+        self.gravity = GravityEstimatorLowpass(coefficients)
+
+    def process_window(self, win : array.array):
+
+        # TODO: run orientation estimation, extract
+        assert self.gravity is not None, 'gravity filter not loaded'
+
+        orientation_stats = RunningStats(dims=3)
+        orientation = array.array('f', (0 for i in range(3)))
+
+        sma_sum = 0.0
+
+        n_samples = len(win) // 3
+        for i in range(n_samples):
+            #sample += 1
+            xyz = win[(i*3):(i*3)+3]
+            gravity = self.gravity.update(xyz)
+            orientation = normalize_gravity(gravity, out=orientation)
+            #pitch, roll = compute_tilt(orientation)
+
+            # summarize orientation
+            orientation_stats.update(orientation)
+
+            ax = win[(i*3)+0]
+            ay = win[(i*3)+1]
+            az = win[(i*3)+1]
+
+            # compute the motion (linear-acceleration)
+            # by subtracting gravity vector
+            mx = ax - gravity[0]
+            my = ay - gravity[1]
+            mz = az - gravity[2]
+
+            # compute Signal Magnitude Area (SMA)
+            sma_sum += abs(mx) + abs(my) + abs(mz)
+
+            # 
+
+        # FIXME: assign to feature vector - with scaling
+        #out[3] = int(sma_sum / n / cfg.sma_scale)
+
+        out = self.features
+
+        # XXX: make sure to match order of column definition
+        orient_scale = 1000
+        # overall orientation
+        orient_mean = orientation_stats.mean
+        out[0] = int(orient_mean[0] * orient_scale)
+        out[1] = int(orient_mean[1] * orient_scale)
+        out[2] = int(orient_mean[2] * orient_scale)
+
+        # overall energy
+        sma_scale = 64
+        out[3] = int((sma_sum / n_samples) * sma_scale)
+
+        # variation in orientation
+
+        # orientation_stats.std()
+        orient_std = orientation_stats.std()
+        out[4] = int(orient_std[0] * orient_scale)
+        out[5] = int(orient_std[1] * orient_scale)
+        out[6] = int(orient_std[2] * orient_scale)
+
 
 
     def process_accelerometer(self, accel):
@@ -223,8 +332,8 @@ class Application():
         window = self.window.push(accel)
         if window is not None:
 
-            # TODO: get rid of the AccelConfig, duplicated settings
-            compute_features(window, self.features, cfg)
+            # extract features
+            self.process_window(window)
 
             # store features
             self.db.append_data('features', self.features)
