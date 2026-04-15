@@ -12,3 +12,11 @@
 - Add enable/disable recording to watch UI?
 - Add watchdog to ensure no hangups?
 - Allow to add labels via screen
+
+## Nice to have:
+
+- Event log. That can be accessed via API/webui.
+Internal actions, external.
+- Discovery device of using mDNS
+- Easier way to configure WiFi credentials
+- Ability to act as WiFi station
