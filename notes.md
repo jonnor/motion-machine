@@ -1,54 +1,104 @@
 
 # Presentation-ready
 
-Must
+The pieces we want from project
 
-- Do some data recording, ensure can see status. And enable/disable?
-- Maybe add watchdog to ensure no hangups?
-- Setup a minimally useful tree-based classifier
+- Showing EDA in browser. Interactive analysis
+- On-device inference with Random Forest
+- Analyze data i Jupyter Lite via API. Potentially push back to device
+
+#### Demo 1: On-device time-series database
+
+Loading many hours of data from device. Various detail levels.
+
+- Import data onto device/database. Incl features
+- UI. Add ability to select time-section, show raw data
+
+#### Demo 2: Clustering for EDA
+
+- Import data onto device/database. Incl features
+- Add PCA 2d projection of features to browser
+- Allow selecting in PCA/scatterplot -> show on timeline
+- In scatter and timeline
+
+Bonus:
+
+- Allow selecting features generally - not just PCA plots
+- Use ReservoirSampler on-device.
+To have a ready-to-use random sample of features.
+Kind-of a cache. Say 1k samples a 10 features, approx 20 kB
+- Clustering. Show PCA variance explained over components
+
+
+#### Demo 3: On-device inference
+
+- Train RF model for PAMAP2. Using har_train
+- Compute class durations from classifier, store in database
+- Visualize class durations in webUI
+
+More info: Previous talks
+
+#### Demo 3: Exit to Jupyter
+
+- Add link/button for "Open in Jupyter"
+- Record video
+
+People can imagine what to do from there.
+And explain can push data back to the device
+
+
+#### General
 
 Should
 
-- UI. Show PCA clustered features. In scatter and timeline
-- Compute class durations from classifier, store and visualize
-- Add link/button for "Open in Jupyter"
-- Add end-to-end test for data processing, taking from pamap2_25hz
 - Fix time partitioning when loading accelerometer data historically
-
 
 Want
 
-- Features. Cross-axis information
-- Features. Band energies. 4-5 bands
 - UI. Scatterplot matrix over features. Time windows selection
-- UI. Label sections on timeline.
-- Implement some "standard" classifier model.
+- Few-shot learning using emlearn_neighbors
 - Frontend. Cluster windows data using k-means. See on timeline.
 Fix emlearn_kmeans for float and/or int16.
-- Few-shot learning using emlearn_neighbors
+
+### Demo X: In-jupyter classifier training
+
+?? Does har_train work in browser
+Skipped!
+Just show exiting to Jupyter notebook.
+People can imagine what to do from there.
+And explain can push data back to the device
+
+
+### Demo X: In-browser classifier training
+
 - Train model in-browser using MicroPython with emlearn_extratrees
-- Clustering. Show PCA variance explained over components
 
-Demo maybe
 
-- add some graphics on screen. Using micropython-touch
-- handle button press wakeup. Enable POWERON IRQ in AXP2101, IQR handler on pin 21
-- allow to add labels via screen
+## Cleanups
 
-Nice-to-have
+- Move PCA and scaler into emlearn-micropython.
+Make clustering example, include ReservoirSampler
+Demonstrate on a well-known dataset
+- Move "Microhive" to separate git repo, mip installable.
+- Move feature calculations into emlearn-micropython. HAR example?
+- emlearn-micropyton. Run tests also in browser
 
-- push acceleration data over HTTP API, for testing
+## Later
+
+Labelin
+
+- UI. Label sections on timeline.
+
+Maybe
+
+- Features. Cross-axis information
+- Features. Band energies. 4-5 bands
+- Push acceleration data over HTTP API, for testing
 
 Database
 
 - Column selection/filtering.
 
-Cleanups
-
-- Move PCA and scaler into emlearn-micropython. Make clustering example, include ReservoirSampler
-- Move Microhive to separate git repo, mip installable
-- Move feature calculations into emlearn-micropython. HAR example?
-- emlearn-micropyton. Run tests also in browser
 
 # Workflow
 
