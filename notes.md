@@ -14,7 +14,15 @@ Loading many hours of data from device. Various detail levels.
 - Import data onto device/database. Incl features
 - UI. Add ability to select time-section, show raw data
 
-#### Demo 2: Clustering for EDA
+#### Demo 2: On-device inference
+
+- Train RF model for PAMAP2. Using har_train
+- Compute class durations from classifier, store in database
+- Visualize class durations in webUI
+
+More info: Previous talks
+
+#### Demo 3: Clustering for EDA
 
 - Import data onto device/database. Incl features
 - Add PCA 2d projection of features to browser
@@ -29,16 +37,7 @@ To have a ready-to-use random sample of features.
 Kind-of a cache. Say 1k samples a 10 features, approx 20 kB
 - Clustering. Show PCA variance explained over components
 
-
-#### Demo 3: On-device inference
-
-- Train RF model for PAMAP2. Using har_train
-- Compute class durations from classifier, store in database
-- Visualize class durations in webUI
-
-More info: Previous talks
-
-#### Demo 3: Exit to Jupyter
+#### Demo 4: Use data in other environments
 
 - Add link/button for "Open in Jupyter"
 - Record video

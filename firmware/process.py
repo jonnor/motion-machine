@@ -75,19 +75,24 @@ def main():
     parse_args(sys.argv, config)
     print(config)
 
-    hop_length = config['hop_length']
-    window_length = config['window_length']
-    samplerate = config['samplerate']
+    hop_length = int(config['hop_length'])
+    window_length = int(config['window_length'])
+    samplerate = int(config['samplerate'])
 
 
+    # FIXME: setup window_length/hop/samplerate in app to match
     app = Application()
     filter_path = os.path.join(here, 'orientation_lowpass.json')
     app.load_gravity_filter(filter_path)
 
-    samples = array.array('f', (0.0 for _ in range(3*window_length)))
+    typecode = 'h'
+    samples = array.array(typecode, (0 for _ in range(3*window_length)))
+    sample_scale = 2**15-1
 
-    # FIXME: read from app resources
-    headers = ['time', 'b', 'c' ]
+    # write feature column names
+    feature_resource = app.db._resources['features']
+    feature_columns = feature_resource['columns']
+    headers = ['time'] + feature_columns
     with open(config['output'], 'w') as out_file:
         out_file.write(','.join(headers) + '\n')
     
@@ -106,9 +111,9 @@ def main():
             # convert to array
             for i, row in enumerate(batch):  
                 row['time'] # not just, just check that it is there
-                samples[(i*3)+0] = float(row['acc_x'])
-                samples[(i*3)+1] = float(row['acc_y'])
-                samples[(i*3)+2] = float(row['acc_z'])
+                samples[(i*3)+0] = int(float(row['acc_x']) * sample_scale)
+                samples[(i*3)+1] = int(float(row['acc_y']) * sample_scale)
+                samples[(i*3)+2] = int(float(row['acc_z']) * sample_scale)
 
             # Compute features
             window = app.window.push(samples)
@@ -118,12 +123,13 @@ def main():
                 # write features to output file
                 out_row = [ time ] + list(app.features)
                 out_file.write(','.join(str(v) for v in out_row) + '\n')
+                rows += 1
 
             time += (len(batch) * dt)
             batches += 1
 
-    print(time, batches, rows)
-    raise Exception("foo")
+    print('time', time, 'batches', batches, 'rows', rows)
+    #raise Exception("foo")
 
 if __name__ == '__main__':
     main()
