@@ -11,7 +11,7 @@ from application import Application
 
 
 # ── Main processing ────────────────────────────────────────────────────────────
-def load_file(app, input_path, chunk_rows=25, columns=3) -> int:
+def load_file(app, input_path, chunk_rows=64, columns=3) -> int:
     """Returns number of windows written."""
 
     chunk_count = 0

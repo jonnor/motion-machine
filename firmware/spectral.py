@@ -112,24 +112,4 @@ class SpectralFeaturesExtractor:
                 entropy -= p * (math.log(p) / math.log(2))
         return entropy
 
-    def preprocess(self, samples: array.array):
-        assert len(samples) == (self.window_length * self.dimensions)
-        self._compute_raw_fft(samples)
 
-        fft_energy = sum(self.spectrum)
-        scale = 2**14 / fft_energy if fft_energy > 1e-6 else 0.0
-
-        return [self.spectrum[i] * scale for i in range(self.fft_start, self.fft_end)]
-
-    def extract_all(self, samples: array.array):
-        """Return spectral feature vector. Call after preprocess(), or pass samples to recompute."""
-        assert len(samples) == (self.window_length * self.dimensions)
-        self._compute_raw_fft(samples)
-
-        return [
-            self.spectral_energy(),
-            self.dominant_frequency(),
-            self.spectral_centroid(),
-            self.spectral_spread(),
-            self.spectral_entropy(),
-        ]

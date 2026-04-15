@@ -81,13 +81,13 @@ def main():
 
 
     # FIXME: setup window_length/hop/samplerate in app to match
-    app = Application()
+    app = Application(window_length=window_length, samplerate=samplerate, hop_length=hop_length)
     filter_path = os.path.join(here, 'orientation_lowpass.json')
     app.load_gravity_filter(filter_path)
 
     typecode = 'h'
     samples = array.array(typecode, (0 for _ in range(3*window_length)))
-    sample_scale = 2**15-1
+    sample_scale = 1.0 # 2**15-1
 
     # write feature column names
     feature_resource = app.db._resources['features']

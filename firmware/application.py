@@ -18,6 +18,8 @@ import files
 
 from sliding_window import SlidingWindow
 from orientation import GravityEstimatorLowpass, normalize_gravity, compute_tilt
+from spectral import SpectralFeaturesExtractor
+import timebased
 
 gc.collect()
 
@@ -130,6 +132,9 @@ async def status_task():
 # Main
 # ---------------------------------------------------------------------------
 
+USE_TIMEBASED=False
+
+
 def setup_resources(samplerate=25):
 
     feature_columns = [
@@ -140,7 +145,16 @@ def setup_resources(samplerate=25):
         'orient_std_x',
         'orient_std_y',
         'orient_std_z',
+        # spectral features
+        'spectral_energy',
+        'dominant_frequency',
+        'spectral_centroid',
+        'spectral_spread',
+        'spectral_entropy',
     ]
+
+    if USE_TIMEBASED:
+        feature_columns = [ str(i) for i in range(timebased.N_FEATURES) ]
 
     class_columns = [
         'a',
@@ -213,20 +227,18 @@ class RunningStats:
 
 
 class Application():
-    def __init__(self, database_dir='tsdb', verbose=3):
+    def __init__(self, database_dir='tsdb', verbose=3, samplerate = 25, window_length=128, hop_length=32):
 
         resources = setup_resources()
         self.db = MicroHive(database_dir, resources)
 
-        samplerate = 25
-        window_length =  int(samplerate * 4.0)
-        hop_length = int(samplerate * 1.0)
-        self.window = SlidingWindow(window_length, hop_length, 3)
+        self.window_length = window_length
+        self.window = SlidingWindow(self.window_length, hop_length, 3)
 
         self.verbose = verbose
 
         # feature extraction
-        self.n_features = 7
+        self.n_features = len(resources['features']['columns'])
         self.features = array.array('h', (0 for _ in range(self.n_features)))
 
         # lazy-loaded
@@ -257,7 +269,34 @@ class Application():
         coefficients = array.array('f', config['coefficients'])
         self.gravity = GravityEstimatorLowpass(coefficients)
 
+
+    def process_window_timebased(self, win : array.array):
+
+        n_samples = len(win) // 3
+
+        DATA_TYPECODE = 'h'
+        x_values = array.array(DATA_TYPECODE, (0 for _ in range(n_samples)))
+        y_values = array.array(DATA_TYPECODE, (0 for _ in range(n_samples)))
+        z_values = array.array(DATA_TYPECODE, (0 for _ in range(n_samples)))
+
+        # De-interleave data from XYZ1 XYZ2... into separate continious X,Y,Z
+        for i in range(n_samples):
+            x_values[i] = win[(i*3)+0]
+            y_values[i] = win[(i*3)+1]
+            z_values[i] = win[(i*3)+2]
+
+        features = timebased.calculate_features_xyz((x_values, y_values, z_values))
+
+        for i in range(len(features)):
+            self.features[i] = int(features[i])
+
+
     def process_window(self, win : array.array):
+
+        # XXX: TEMP
+        if USE_TIMEBASED:
+            return self.process_window_timebased(win)
+
 
         # TODO: run orientation estimation, extract
         assert self.gravity is not None, 'gravity filter not loaded'
@@ -267,12 +306,20 @@ class Application():
 
         sma_sum = 0.0
 
+        sp = SpectralFeaturesExtractor(self.window_length,
+            dimensions=3, sample_rate=25, sample_scale=2**15)
+
         n_samples = len(win) // 3
+        assert n_samples == self.window_length, (n_samples == self.window_length)
+
         for i in range(n_samples):
             #sample += 1
             xyz = win[(i*3):(i*3)+3]
             gravity = self.gravity.update(xyz)
-            orientation = normalize_gravity(gravity, out=orientation)
+            try:
+                normalize_gravity(gravity, out=orientation)
+            except ZeroDivisionError:
+                pass
             #pitch, roll = compute_tilt(orientation)
 
             # summarize orientation
@@ -292,6 +339,9 @@ class Application():
             sma_sum += abs(mx) + abs(my) + abs(mz)
 
             # 
+
+        # process spectral features
+        sp.compute_spectrum(win)
 
         # Assign outputs to feature vector - with scaling
         # TODO: support dynamic feature selection/order
@@ -317,6 +367,12 @@ class Application():
         out[5] = int(orient_std[1] * orient_scale)
         out[6] = int(orient_std[2] * orient_scale)
 
+        spectral_scale = 1000
+        out[7] = int(sp.spectral_energy() * spectral_scale)
+        out[8] = int(sp.dominant_frequency() * spectral_scale)
+        out[9] = int(sp.spectral_centroid() * spectral_scale)
+        out[10] = int(sp.spectral_spread() * spectral_scale)
+        out[11] = int(sp.spectral_entropy() * spectral_scale)
 
 
     def process_accelerometer(self, accel):
