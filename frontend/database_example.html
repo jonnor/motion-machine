@@ -150,7 +150,7 @@ async function fetchInfo(resource) {
 }
 
 async function fetchQuery(resource, startS, endS) {
-  const url = `/query?resource=${resource}&start=${startS}&end=${endS}&chunk_rows=200`;
+  const url = `/query?resource=${resource}&start=${startS}&end=${endS}&chunk_rows=1000`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`/query ${r.status}: ${await r.text()}`);
   return r.arrayBuffer();
@@ -161,7 +161,7 @@ function epochToLocal(s) {
   return new Date(s * 1000).toISOString().slice(0, 16);
 }
 function localToEpoch(s) {
-  return Math.floor(new Date(s + ':00Z').getTime() / 1000);
+  return Math.floor(new Date(s + ':00').getTime() / 1000);
 }
 function fmtDuration(seconds) {
   if (seconds < 60)   return `${seconds}s`;
@@ -209,10 +209,91 @@ function Chart({ label, times, values, color }) {
   );
 }
 
+function MultiChart({ series }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!ref.current || !series) return;
+
+    const n = series.columns.length;
+    const gap = 0.02;
+    const slotH = 1 / n;
+
+    const traces = series.columns.map((col, i) => ({
+      x: series.times,
+      y: col.values,
+      type: 'scatter',
+      mode: 'lines',
+      name: col.name,
+      line: { color: COLORS[i % COLORS.length], width: 1.2 },
+      xaxis: 'x',
+      yaxis: i === 0 ? 'y' : `y${i + 1}`,
+      hovertemplate: '%{y}<extra></extra>',
+    }));
+
+    const layout = {
+      paper_bgcolor: 'transparent',
+      plot_bgcolor: '#0d0d0d',
+      font: { family: "'IBM Plex Mono', monospace", size: 11, color: '#888' },
+      margin: { t: 12, b: 60, l: 54, r: 16 },
+      height: 160 * n,
+      showlegend: false,
+      xaxis: {
+        gridcolor: '#1e1e1e', linecolor: '#242424', tickcolor: '#242424',
+        type: 'date', domain: [0, 1],
+        tickformat: '%H:%M:%S\n%Y-%m-%d',
+        anchor: n === 1 ? 'y' : `y${n}`,
+        range: [series.times[0], series.times[series.times.length - 1]],
+      },
+    };
+
+    console.log('ll', layout)
+
+    series.columns.forEach((col, i) => {
+      const ykey = i === 0 ? 'yaxis' : `yaxis${i + 1}`;
+      const bottom = (n - i - 1) * slotH + gap;
+      const top    = (n - i)     * slotH - gap;
+      layout[ykey] = {
+        gridcolor: '#1e1e1e', linecolor: '#242424', tickcolor: '#242424',
+        zeroline: false,
+        title: { text: col.name, font: { size: 10 }, standoff: 4 },
+        domain: [bottom, top],
+        anchor: 'x',
+      };
+    });
+
+    Plotly.purge(ref.current);
+    Plotly.newPlot(ref.current, traces, layout, { responsive: true, displayModeBar: false });
+  }, [series]);
+
+  return h('div', { class: 'chart-wrap' },
+    h('div', { ref, style: { width: '100%' } })
+  );
+}
+
+function ColSelector({ columns, selected, onChange }) {
+  const toggle = i => {
+    const next = selected.includes(i)
+      ? selected.filter(x => x !== i)
+      : [...selected, i].sort((a, b) => a - b);
+    if (next.length > 0) onChange(next);
+  };
+  return h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;padding:12px 28px;border-bottom:1px solid var(--border);background:var(--surface);' },
+    columns.map((name, i) =>
+      h('button', {
+        key: i,
+        class: selected.includes(i) ? 'btn' : 'btn secondary',
+        style: `border-color:${selected.includes(i) ? COLORS[i % COLORS.length] : 'var(--border)'};color:${selected.includes(i) ? COLORS[i % COLORS.length] : 'var(--muted)'};padding:4px 12px;font-size:11px;`,
+        onClick: () => toggle(i),
+      }, name)
+    )
+  );
+}
+
 // ── Main App ─────────────────────────────────────────────────────────────────
 
 function App() {
-  const resource = 'metrics'; // could be a dropdown if multiple resources
+  const resource = 'features'; // could be a dropdown if multiple resources
 
   const [info,    setInfo]    = useState(null);
   const [error,   setError]   = useState(null);
@@ -221,6 +302,7 @@ function App() {
   const [endDt,   setEndDt]   = useState('');
   const [series,  setSeries]  = useState(null);  // { times, columns: [{name, values}] }
   const [stats,   setStats]   = useState(null);
+  const [selectedCols, setSelectedCols] = useState(null); // null = all selected
 
   // Load info on mount
   useEffect(() => {
@@ -248,11 +330,15 @@ function App() {
       const buf = await fetchQuery(resource, startS, endS);
       const { rows, cols, data } = parseNpy(buf);
 
+      console.log({ rows, cols, dataLength: data.length, expected: rows * cols });
+
       // Build timestamp array
       const hopS = info.hop_us / 1e6;
       const times = Array.from({ length: rows }, (_, i) =>
-        new Date((startS + i * hopS) * 1000).toISOString()
+        new Date((startS + i * hopS) * 1000).toISOString().replace('Z', '')
       );
+
+      console.log('query ret range', times[0], times[times.length-1])
 
       // Split columns
       const columns = info.columns.map((name, ci) => ({
@@ -261,6 +347,7 @@ function App() {
       }));
 
       setSeries({ times, columns });
+      setSelectedCols(info.columns.map((_, i) => i)); // select all by default
       setStats({ rows, bytes: buf.byteLength, ms: Math.round(performance.now() - t0) });
     } catch (e) {
       setError(e.message);
@@ -276,6 +363,12 @@ function App() {
   };
 
   const connected = info && !error;
+
+     const visibleSeries = series && selectedCols
+      ? { ...series, columns: series.columns.filter((_, i) => selectedCols.includes(i)) }
+      : series;
+
+  console.log('s', series, visibleSeries)
 
   return h('div', { id: 'app' },
     // Header
@@ -317,21 +410,19 @@ function App() {
     // Error
     error && h('div', { class: 'error-bar' }, error),
 
+    series && selectedCols && h(ColSelector, {
+      columns: info.columns,
+      selected: selectedCols,
+      onChange: setSelectedCols,
+    }),
+
     // Charts
     h('div', { class: 'charts' },
-      series
-        ? series.columns.map((col, i) =>
-            h(Chart, {
-              key: col.name,
-              label: col.name,
-              times: series.times,
-              values: col.values,
-              color: COLORS[i % COLORS.length],
-            })
-          )
-        : h('div', { style: { color: 'var(--muted)', padding: '40px 0', textAlign: 'center', letterSpacing: '0.1em' } },
-            info ? 'select a time range and press query' : 'connecting to device…'
-          )
+        series
+          ? h(MultiChart, { series: visibleSeries })
+          : h('div', { style: { color: 'var(--muted)', padding: '40px 0', textAlign: 'center', letterSpacing: '0.1em' } },
+              info ? 'select a time range and press query' : 'connecting to device…'
+            )
     ),
 
     // Footer stats

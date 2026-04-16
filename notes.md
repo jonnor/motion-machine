@@ -16,7 +16,6 @@ Loading many hours of data from device. Various detail levels.
 
 #### Demo 2: On-device inference
 
-- Train RF model for PAMAP2. Using har_train
 - Compute class durations from classifier, store in database
 - Visualize class durations in webUI
 

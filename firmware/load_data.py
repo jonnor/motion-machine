@@ -11,11 +11,18 @@ from application import Application
 
 
 # ── Main processing ────────────────────────────────────────────────────────────
-def load_file(app, input_path, chunk_rows=64, columns=3) -> int:
+def load_file(app, input_path, columns=3, start_time=None) -> int:
     """Returns number of windows written."""
 
     chunk_count = 0
 
+    if start_time is None:
+        start_time = 1776296788 - (3600 * 24 * 10)
+
+    chunk_rows = app.hop_length
+
+    timestamp = start_time
+    dt = 1.0 / app.samplerate
     with npyfile.Reader(input_path) as reader:
         shape = reader.shape
         assert len(shape) == 2 and shape[1] == columns, \
@@ -32,8 +39,9 @@ def load_file(app, input_path, chunk_rows=64, columns=3) -> int:
                 break
 
             # FIXME: specify starting time for the data
-            app.process_accelerometer(chunk)
+            app.process_accelerometer(chunk, timestamp=timestamp)
             chunk_count += 1
+            timestamp += (dt * chunk_rows)
 
     return chunk_count
 

@@ -80,7 +80,6 @@ def main():
     samplerate = int(config['samplerate'])
 
 
-    # FIXME: setup window_length/hop/samplerate in app to match
     app = Application(window_length=window_length, samplerate=samplerate, hop_length=hop_length)
     filter_path = os.path.join(here, 'orientation_lowpass.json')
     app.load_gravity_filter(filter_path)

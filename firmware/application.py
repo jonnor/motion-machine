@@ -163,7 +163,7 @@ def setup_resources(samplerate=25):
         'standing',
         'sitting',
         'running',
-    ],
+    ]
 
     resources = {}
     
@@ -238,6 +238,8 @@ class Application():
 
         self.window_length = window_length
         self.window = SlidingWindow(self.window_length, hop_length, 3)
+        self.hop_length = hop_length
+        self.samplerate = samplerate
 
         self.verbose = verbose
 
@@ -267,8 +269,8 @@ class Application():
         with open(path) as f:
             config = json.loads(f.read())
 
-        # FIXME: check samplerate
-        #config['samplerate']
+        # check samplerate
+        assert int(config['samplerate']) == self.samplerate
 
         coefficients = array.array('f', config['coefficients'])
         self.gravity = GravityEstimatorLowpass(coefficients)
@@ -379,13 +381,13 @@ class Application():
         out[11] = int(sp.spectral_entropy() * spectral_scale)
 
 
-    def process_accelerometer(self, accel):
+    def process_accelerometer(self, accel, timestamp=None):
 
         if self.verbose >= 2:
             print('process-accelerometer', len(accel))
 
         # store raw data
-        self.db.append_data('raw', accel)
+        self.db.append_data('raw', accel, timestamp_s=timestamp)
 
         # compute overlapped window
         window = self.window.push(accel)
@@ -395,14 +397,14 @@ class Application():
             self.process_window(window)
 
             # store features
-            self.db.append_data('features', self.features)
+            self.db.append_data('features', self.features, timestamp_s=timestamp)
 
             if self.verbose >= 3:
                 print('features', self.features)
             if self.model is not None:
                 self.model.predict(self.features, self.predictions)
                 scaled = array.array('h', (int(p*100) for p in self.predictions))
-                self.db.append_data('predictions', scaled)
+                self.db.append_data('predictions', scaled, timestamp_s=timestamp)
 
 
 
@@ -430,12 +432,12 @@ def add_routes(app, db, on_file_changed=None):
 
 
 
-def main(host='0.0.0.0', port=80, debug=True):
+def main(host='0.0.0.0', port=8000, debug=True):
 
     state = Application()
 
     # Load processing configuration
-    filter_path = 'orientation_lowpass.json'
+    filter_path = 'firmware/orientation_lowpass.json'
     state.load_gravity_filter(filter_path)
 
     # Start the different tasks
