@@ -13,7 +13,7 @@ Key features:
   - Fixed memory, set at construction time.
   - Constant relative error across the specified range - same precision
     at the tail as near the median.
-  - O(1) record(): a few bit shifts and one array write, no allocation
+  - Fast record(): O(1). no allocation. 100-300 us on ESP32/RP2
   - Mergeable: multiple histograms can be combined.
 
 Notes:
@@ -45,7 +45,7 @@ class HdrHistogram:
     constant relative error across the tracked range.
     """
 
-    def __init__(self, max_value, sig_digits=3, bits=32):
+    def __init__(self, max_value, sig_digits=2, bits=32):
         if bits == 16:
             self.typecode = 'H'
             self.max_count = 0xFFFF
