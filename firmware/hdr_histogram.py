@@ -6,6 +6,9 @@ Tracks approximated percentiles of a value stream without storing individual sam
 Useful for latency tracking, sensor reading distributions,
 or any long-tailed metric where the tail (p90, p99, etc) is of interest.
 
+Default sig_digits=2 gives around 1.5% worst-case error.
+Increasing sig_digits by 1 decreases error by around 10x, but around 2x the memory usage.
+
 Key features:
   - Tracks non-negative integer-valued metrics (example: time in microseconds).
   - Pure-Python, works on MicroPython and CPython.
@@ -40,9 +43,7 @@ class HdrEmptyHistogramError(Exception):
 
 class HdrHistogram:
     """
-    Pure-Python HDR Histogram. Stdlib only (math, array). Works on CPython
-    and MicroPython. Fixed memory footprint, O(1) record, mergeable,
-    constant relative error across the tracked range.
+    HDR Histogram for approximat percentile tracking in constant memory
     """
 
     def __init__(self, max_value, sig_digits=2, bits=32):
@@ -152,23 +153,23 @@ class HdrHistogram:
                 if c:
                     yield self._value_from_index(bucket_index, sub_bucket_index), c
 
-    def percentile(self, p):
-        return self.percentiles([p])[p]
-
-    def percentiles(self, ps):
+    def percentile(self, p) -> float:
+        return self.percentiles([p])[0]
+ 
+    def percentiles(self, ps) -> list[float]:
         """
-        Compute multiple percentiles in a single pass over the counts
-        array. Returns a dict {p: value}. Much cheaper than calling
-        percentile() once per p, since the O(counts_len) walk is shared.
+        Compute multiple percentiles in a single pass.
+
+        Cheaper than calling percentile() once per p
         """
         if self.total_count == 0:
             raise HdrEmptyHistogramError("no values recorded")
-
-        result = {}
+ 
+        result = [None] * len(ps)
         # sort targets ascending so we can satisfy them in one forward pass
         order = sorted(range(len(ps)), key=lambda i: ps[i])
         targets = [math.ceil((ps[i] / 100.0) * self.total_count) for i in order]
-
+ 
         cumulative = 0
         last_value = 0
         ti = 0
@@ -176,17 +177,18 @@ class HdrHistogram:
             cumulative += count
             last_value = value
             while ti < len(targets) and cumulative >= targets[ti]:
-                result[ps[order[ti]]] = value
+                result[order[ti]] = value
                 ti += 1
             if ti >= len(targets):
                 break
-
+ 
         # any remaining targets (e.g. p=100 beyond last populated slot)
         while ti < len(targets):
-            result[ps[order[ti]]] = last_value
+            result[order[ti]] = last_value
             ti += 1
-
+ 
         return result
+
 
     def mean(self):
         if self.total_count == 0:

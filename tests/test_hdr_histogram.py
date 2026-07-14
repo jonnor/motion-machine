@@ -239,6 +239,32 @@ def test_percentile_matches_brute_force():
         assert actual == expected, "p%s expected %s got %s" % (p, expected, actual)
 
 
+def test_percentiles_returns_list_in_input_order():
+    h = HdrHistogram(1000)
+    for i in range(1, 101):
+        h.record(i)
+
+    ps = [90, 10, 50]  # deliberately unsorted
+    result = h.percentiles(ps)
+    assert isinstance(result, list)
+    assert len(result) == len(ps)
+    assert result[0] == h.percentile(90)
+    assert result[1] == h.percentile(10)
+    assert result[2] == h.percentile(50)
+
+
+def test_percentiles_handles_duplicate_requests():
+    h = HdrHistogram(1000)
+    for i in range(1, 101):
+        h.record(i)
+
+    ps = [50, 50, 99]
+    result = h.percentiles(ps)
+    assert len(result) == 3
+    assert result[0] == result[1] == h.percentile(50)
+    assert result[2] == h.percentile(99)
+
+
 def test_percentiles_batch_matches_single_calls():
     vals = _make_sample_dataset(n=5000, seed=2)
     h = HdrHistogram(3_600_000, sig_digits=3, bits=32)
@@ -247,8 +273,8 @@ def test_percentiles_batch_matches_single_calls():
 
     ps = [1, 25, 50, 75, 90, 99, 99.9, 99.99, 100]
     batch = h.percentiles(ps)
-    for p in ps:
-        assert batch[p] == h.percentile(p), "mismatch at p%s" % p
+    for i, p in enumerate(ps):
+        assert batch[i] == h.percentile(p), "mismatch at p%s" % p
 
 
 def test_percentiles_matches_brute_force():
@@ -260,9 +286,9 @@ def test_percentiles_matches_brute_force():
 
     ps = [1, 25, 50, 75, 90, 99, 99.9, 99.99, 100]
     batch = h.percentiles(ps)
-    for p in ps:
+    for i, p in enumerate(ps):
         expected = _brute_percentile(vals, p)
-        assert batch[p] == expected, "p%s expected %s got %s" % (p, expected, batch[p])
+        assert batch[i] == expected, "p%s expected %s got %s" % (p, expected, batch[i])
 
 
 def test_mean_close_to_brute_force():
@@ -355,7 +381,7 @@ def test_memory_bytes_matches_typecode():
 
 
 # ---------------------------------------------------------------------
-# test runner (pytest style)
+# test runner (no pytest)
 # ---------------------------------------------------------------------
 
 def run_all_tests():
