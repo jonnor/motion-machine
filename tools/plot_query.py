@@ -1,7 +1,7 @@
 
 #!/usr/bin/env python3
 """
-plot_query.py - Query MicroHive HTTP API and plot as timeseries with Plotly
+plot_query.py - Query TSDB HTTP API and plot as timeseries with Plotly
 
 Usage:
     python3 plot_query.py --resource sensor --start 2025-06-01T05:00:00 --end 2025-06-01T07:00:00
@@ -73,7 +73,7 @@ def plot(arr, columns, start_dt, end_dt, resource):
         )
 
     fig.update_layout(
-        title='MicroHive: {} — {} to {}'.format(
+        title='{} — {} to {}'.format(
             resource,
             start_dt.strftime('%Y-%m-%d %H:%M'),
             end_dt.strftime('%H:%M UTC'),
@@ -89,7 +89,7 @@ def plot(arr, columns, start_dt, end_dt, resource):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description='Query MicroHive and plot timeseries')
+    parser = argparse.ArgumentParser(description='Query TSDB HTTP API and plot timeseries')
     parser.add_argument('--host',       default=DEFAULT_HOST)
     parser.add_argument('--port',       default=DEFAULT_PORT, type=int)
     parser.add_argument('--resource',   default='sensor')

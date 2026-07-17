@@ -12,8 +12,8 @@ import math
 
 from microdot import Microdot, Response, send_file
 
-from microhive import MicroHive
-import microhive_api
+from tsdb.core import TSDB
+from tsdb import web as tsdb_api
 import files
 
 from sliding_window import SlidingWindow
@@ -234,7 +234,8 @@ class Application():
     def __init__(self, database_dir='tsdb', verbose=3, samplerate = 25, window_length=128, hop_length=32):
 
         resources = setup_resources()
-        self.db = MicroHive(database_dir, resources)
+        db_debug = verbose >= 2
+        self.db = TSDB(database_dir, resources, debug=db_debug)
 
         self.window_length = window_length
         self.window = SlidingWindow(self.window_length, hop_length, 3)
@@ -413,7 +414,7 @@ def add_routes(app, db, on_file_changed=None):
 
     files.add_routes(app, base_dir='notebooks/', on_file_changed=on_file_changed)
 
-    microhive_api.add_routes(app, db)
+    tsdb_api.add_routes(app, db)
 
     # User interface
     MAX_AGE = 1 # XXX: set longer in production, for more efficient caching

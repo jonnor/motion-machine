@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>microhive</title>
+<title>Motion Machine timeseries database</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.1/plotly.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/preact/10.19.3/preact.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/preact/10.19.3/hooks.umd.js"></script>
@@ -373,7 +373,7 @@ function App() {
   return h('div', { id: 'app' },
     // Header
     h('header', null,
-      h('h1', null, 'micro', h('span', null, 'hive')),
+      h('h1', null, 'Timeseries database', h('span', null, '')),
       h('span', { class: 'resource-tag' }, resource),
       h('div', { class: 'status' },
         h('div', { class: `dot ${error ? 'err' : info ? 'ok' : ''}` }),

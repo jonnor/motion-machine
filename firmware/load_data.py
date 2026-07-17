@@ -15,14 +15,15 @@ def load_file(app, input_path, columns=3, start_time=None) -> int:
     """Returns number of windows written."""
 
     chunk_count = 0
+    last_progress_log = -1
 
     if start_time is None:
         start_time = 1776296788 - (3600 * 24 * 10)
 
     chunk_rows = app.hop_length
-
     timestamp = start_time
     dt = 1.0 / app.samplerate
+    print('load-file-start', input_path)
     with npyfile.Reader(input_path) as reader:
         shape = reader.shape
         assert len(shape) == 2 and shape[1] == columns, \
@@ -43,13 +44,21 @@ def load_file(app, input_path, columns=3, start_time=None) -> int:
             chunk_count += 1
             timestamp += (dt * chunk_rows)
 
-    return chunk_count
+            samples_processed = (chunk_rows * chunk_count)
+            progress_percent = int(100 * (samples_processed/n_samples))
+            if progress_percent != last_progress_log:
+                print(f'load-file-progress p={progress_percent}%')
+                last_progress_log = progress_percent
+
+    total_samples = chunk_count*chunk_rows # XXX: a bit off, last read might be short
+    print(f'load-file-done samples={total_samples}')
+    return total_samples
 
 
 
 if __name__ == '__main__':
 
-    app = Application()
+    app = Application(verbose=1)
 
     filter_path = 'firmware/orientation_lowpass.json'
     app.load_gravity_filter(filter_path)
