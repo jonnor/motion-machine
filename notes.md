@@ -11,15 +11,12 @@ The pieces we want from project
 
 Loading many hours of data from device. Various detail levels.
 
-- Import data onto device/database. Incl features
 - UI. Add ability to select time-section, show raw data
 
 #### Demo 2: On-device inference
 
 - Compute class durations from classifier, store in database
 - Visualize class durations in webUI
-
-More info: Previous talks
 
 #### Demo 3: Clustering for EDA
 
@@ -77,13 +74,12 @@ And explain can push data back to the device
 - Move PCA and scaler into emlearn-micropython.
 Make clustering example, include ReservoirSampler
 Demonstrate on a well-known dataset
-- Move "Microhive" to separate git repo, mip installable.
-- Move feature calculations into emlearn-micropython. HAR example?
+- Move feature calculations into emlearn-micropython or emlearn-motion. HAR example?
 - emlearn-micropyton. Run tests also in browser
 
 ## Later
 
-Labelin
+Labeling
 
 - UI. Label sections on timeline.
 
@@ -96,7 +92,6 @@ Maybe
 Database
 
 - Column selection/filtering.
-
 
 # Workflow
 
@@ -112,45 +107,6 @@ Limiting range slightly of int16 input data to, `[-16384, 16383]`
 should make it possible to fit into 16 bit after delta-zigzag.
 Maybe extending to 64-bit, Simple9b.
 But with a selector, then can only fit 4x15 integers in 64 bits.
-
-
-
-# Compression
-
-delta-zigzag-simple9b did not compress PAMAP2 features much. Net loss.
-delta-zigzag-simple9b. 406 kB in 18 seconds. Only 22 kB/s.
-
-Would likely need to add quantization to get compression benefits.
-
-raw16. 396 kB in 3 seconds. 132 kB/s.
-Tested maximum for reads otherwise is around 210 kB/s.
-
-
-```
-mpremote run tests/bench_microhive.py
-MicroHive benchmark  cols=7  hop=1000000us  gran=hour
-platform: esp32
-
---- raw filesystem ---
-  open+write+flush+close 1KB x50: 3402ms  (68.0 ms/op)
-  open+read+close 1KB x50:        388ms  (7.8 ms/op)
-
---- append ---
-  append 1h x7cols chunk=100: 2393ms total  1.5 rows/ms  66.5 ms/call
-  append 1h x7cols chunk=1000: 1584ms total  2.3 rows/ms  396.0 ms/call
-
---- query (after 1h write, chunk=100) ---
-  append 1h x7cols chunk=100: 2463ms total  1.5 rows/ms  68.4 ms/call
-  query  3600rows chunk=64: 736ms  4.9 rows/ms  OK
-  query  3600rows chunk=256: 738ms  4.9 rows/ms  OK
-  query  3600rows chunk=512: 728ms  4.9 rows/ms  OK
-
---- query raw (row-major) codec ---
-  query  3600rows chunk=256: 73ms  49.3 rows/ms  OK
---- query raw (col-major) codec ---
-  query  3600rows chunk=256: 392ms  9.2 rows/ms  OK
-
-```
 
 
 # Running emlearn on JupyterLite
