@@ -5,5 +5,7 @@ npyfile.py
 secrets.py
 cors.py
 
+tsdb/
+
 .ipynb_checkpoints/
 __pycache__/

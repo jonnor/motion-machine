@@ -1,4 +1,32 @@
 
+# Developing
+
+Pre-processing PAMAP2 data
+
+```
+python tools/pamap2_data.py
+```
+
+Loading PAMAP2 data and process it
+```
+micropython firmware/load_data.py
+```
+This compute features and predictions, and stores raw data.
+
+
+Will populate tsdb/
+```
+du -sh tsdb/*
+```
+
+TODO: document how to load the data for EDA
+
+TODO: document how to load data for training
+
+??? what is firmware/process.py for? Should be deprecated now
+
+
+
 # Presentation-ready
 
 The pieces we want from project
@@ -68,6 +96,11 @@ And explain can push data back to the device
 
 - Train model in-browser using MicroPython with emlearn_extratrees
 
+Add to emlearn-micropython classification datasets
+- UCI HAR Dataset (Human Activity Recognition using Smartphones) with precomputed features
+- UCI Gas Sensor Array Drift Dataset
+- UCI "Occupancy Detection"
+
 
 ## Cleanups
 
@@ -114,7 +147,6 @@ But with a selector, then can only fit 4x15 integers in 64 bits.
 emlearn 0.23.2 provides a Python-only wheel.
 Can be installed with JupyterLite.
 Can use .convert(format='csv')
-
 
 
 # Running on T-Watch S3

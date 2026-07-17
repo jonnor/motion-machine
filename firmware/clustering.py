@@ -37,9 +37,9 @@ def main():
 
     sampler = ReservoirSampler(k=n_samples, cols=n_features)
 
-    out_path = 'data/pamap2_features.npy'
+    in_path = 'data/pamap2_features.npy'
 
-    load_samples(sampler, out_path)
+    load_samples(sampler, in_path)
 
     data  = sampler.get_flat()
 
